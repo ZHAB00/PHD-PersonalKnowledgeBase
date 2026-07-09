@@ -233,6 +233,20 @@
     rdl();
   }
 
+  function statusLabel(s) {
+    var map = { ready: "ready", pending: "pending", failed: "failed", processing: "processing" };
+    return map[s] || s || "ready";
+  }
+  function statusBadge(s) {
+    var cls = s === "ready" ? "badge badge-ready" : s === "failed" ? "badge badge-failed" : "badge badge-pending";
+    return '<span class="' + cls + '">' + statusLabel(s) + '</span>';
+  }
+  function formatSize(bytes) {
+    if (!bytes || bytes === 0) return "";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1048576).toFixed(1) + " MB";
+  }
   async function rdl() {
     try {
       var url = "/api/documents/list?kb_id=" + encodeURIComponent(state.docKbId) + "&tenant_id=" + state.tenantId;
@@ -243,18 +257,27 @@
       var di = $("docItems");
       if (di) {
         di.innerHTML = docs.map(function(d) {
-          var st = d.status || "ready";
           var isOrphan = (d.id||"").startsWith("orphan_");
-          var riBtn = isOrphan ? '<button class="btn-reindex" data-fn="' + esc(d.filename) + '">Reindex</button>' : "";
-          return '<div class="doc-item"><span class="doc-item-name">' + esc(d.filename) +
-            '</span><span class="doc-item-status">' + esc(st) +
-            '</span>' + riBtn +
-            '<button class="btn-del-doc" data-id="' + d.id + '">Del</button></div>';
+          var chunks = d.total_chunks || 0;
+          var meta = [chunks ? chunks + " chunks" : "", formatSize(d.file_size)].filter(Boolean).join(" · ");
+          var actions = '';
+          if (isOrphan) {
+            actions += '<button class="btn-doc-reindex" data-fn="' + esc(d.filename) + '" title="Reindex"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>';
+          }
+          actions += '<button class="btn-doc-delete" data-id="' + d.id + '" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>';
+          return '<div class="doc-item">' +
+            '<span class="doc-icon" data-type="' + esc(d.doc_type || 'txt') + '">' + (d.doc_type === "pdf" ? "PDF" : d.doc_type === "docx" ? "DOC" : d.doc_type === "md" ? "MD" : "TXT") + '</span>' +
+            '<div class="doc-info">' +
+              '<span class="doc-name">' + esc(d.filename) + '</span>' +
+              '<span class="doc-meta">' + statusBadge(d.status || "ready") + (meta ? ' <span class="doc-meta-text">' + meta + '</span>' : '') + '</span>' +
+            '</div>' +
+            '<div class="doc-actions">' + actions + '</div>' +
+          '</div>';
         }).join("");
-        di.querySelectorAll(".btn-del-doc").forEach(function(b) {
+        di.querySelectorAll(".btn-doc-delete").forEach(function(b) {
           b.addEventListener("click", function() { dld(b.dataset.id); });
         });
-        di.querySelectorAll(".btn-reindex").forEach(function(b) {
+        di.querySelectorAll(".btn-doc-reindex").forEach(function(b) {
           b.addEventListener("click", function() { rdx(b.dataset.fn); });
         });
       }
