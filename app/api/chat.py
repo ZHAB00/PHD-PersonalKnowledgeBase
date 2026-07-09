@@ -1,0 +1,104 @@
+from __future__ import annotations
+from fastapi import APIRouter, HTTPException, Form, Request
+from fastapi.responses import StreamingResponse
+from app.models.chat import ChatRequest, ChatResponse
+from app.rag.graph import chat, chat_stream, get_chat_history, clear_chat_history
+
+router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+
+def _get_user_id(request: Request, fallback: str = "default") -> str:
+    """Extract user_id from auth middleware or fallback to param."""
+    return getattr(request.state, "user_id", fallback)
+
+
+@router.post("/rag", response_model=ChatResponse)
+async def chat_rag(chat_req: ChatRequest, request: Request):
+    """RAG chat endpoint — same as /send, kept for frontend compatibility."""
+    if not chat_req.message.strip():
+        raise HTTPException(400, "消息不能为空")
+    return await chat(
+        session_id=chat_req.session_id, message=chat_req.message,
+        kb_id=chat_req.kb_id, tenant_id=chat_req.tenant_id,
+        user_id=_get_user_id(request, chat_req.user_id),
+        top_k=chat_req.top_k, rerank_strategy=chat_req.rerank_strategy,
+    )
+
+
+@router.post("/send", response_model=ChatResponse)
+async def send_message(chat_req: ChatRequest, request: Request):
+    if not chat_req.message.strip():
+        raise HTTPException(400, "消息不能为空")
+    return await chat(
+        session_id=chat_req.session_id, message=chat_req.message,
+        kb_id=chat_req.kb_id, tenant_id=chat_req.tenant_id,
+        user_id=_get_user_id(request, chat_req.user_id),
+        top_k=chat_req.top_k, rerank_strategy=chat_req.rerank_strategy,
+    )
+
+
+@router.post("/stream")
+async def send_message_stream(
+    request: Request,
+    session_id: str = Form("default"),
+    message: str = Form(...),
+    kb_id: str = Form("default"),
+    tenant_id: str = Form("default"),
+    user_id: str = Form("default"),
+    top_k: int = Form(5),
+    rerank_strategy: str = Form("none"),
+):
+    if not message.strip():
+        raise HTTPException(400, "消息不能为空")
+
+    effective_user = _get_user_id(request, user_id)
+
+    async def generate():
+        async for chunk in chat_stream(session_id, message, kb_id, tenant_id, top_k, rerank_strategy, effective_user):
+            yield f"data: {chunk}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+
+@router.post("/title")
+async def generate_title(data: dict):
+    """Generate a short title from the first user message using AI."""
+    session_id = data.get("session_id", "")
+    message = data.get("message", "")
+    from openai import OpenAI
+    from app.config import settings
+
+    client = OpenAI(base_url=settings.deepseek_base_url, api_key=settings.deepseek_api_key)
+    try:
+        resp = client.chat.completions.create(
+            model=settings.deepseek_model,
+            messages=[
+                {"role": "system", "content": "???????????????????????????????????15??????????????????"},
+                {"role": "user", "content": message[:200]},
+            ],
+            temperature=0.3,
+            max_tokens=50,
+        )
+        title = resp.choices[0].message.content.strip()
+        # Clean up: remove quotes, truncate
+        title = title.replace('"', '').replace("'", '').replace("?", '').replace("?", '')
+        if len(title) > 20:
+            title = title[:20]
+        return {"title": title or "???"}
+    except Exception as e:
+        # Fallback: use first 15 chars of message
+        fallback = message[:15].replace("\n", " ")
+        return {"title": fallback or "???"}
+
+@router.get("/history/{session_id}")
+async def get_history(session_id: str):
+    history = await get_chat_history(session_id)
+    return {"session_id": session_id, "history": history}
+
+
+@router.post("/clear/{session_id}")
+async def clear_history(session_id: str):
+    await clear_chat_history(session_id)
+    return {"status": "ok", "session_id": session_id}

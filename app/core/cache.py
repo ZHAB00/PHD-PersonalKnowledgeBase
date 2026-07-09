@@ -1,0 +1,106 @@
+"""Redis 客户端封装（兼容 Redis 3.x+，不可用时回退内存）"""
+from __future__ import annotations
+import json
+import logging
+from typing import Optional
+
+from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+try:
+    import redis.asyncio as redis
+    _REDIS_AVAILABLE = True
+except ImportError:
+    _REDIS_AVAILABLE = False
+
+_pool = None
+_enabled = False
+_fallback_store: dict[str, str] = {}
+
+
+async def _init():
+    global _pool, _enabled
+    if not _REDIS_AVAILABLE:
+        logger.warning("redis 库未安装，使用内存存储")
+        return
+    try:
+        _pool = redis.ConnectionPool.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            protocol=2,
+        )
+        r = redis.Redis(connection_pool=_pool)
+        await r.ping()
+        _enabled = True
+        logger.info("Redis 连接就绪")
+    except Exception as e:
+        _pool = None
+        _enabled = False
+        logger.warning(f"Redis 连接失败，使用内存存储: {e}")
+
+
+async def get_redis():
+    if _enabled and _pool:
+        return redis.Redis(connection_pool=_pool)
+    raise RuntimeError("Redis not available")
+
+
+async def set(key: str, value: str, ex: int | None = None):
+    """Set a raw string value."""
+    if _enabled and _pool:
+        r = redis.Redis(connection_pool=_pool)
+        await r.set(key, value, ex=ex)
+    else:
+        _fallback_store[key] = value
+
+
+async def get(key: str) -> Optional[str]:
+    """Get a raw string value."""
+    if _enabled and _pool:
+        r = redis.Redis(connection_pool=_pool)
+        return await r.get(key)
+    return _fallback_store.get(key)
+
+
+async def set_json(key: str, value, ex: int | None = None):
+    if _enabled and _pool:
+        r = redis.Redis(connection_pool=_pool)
+        await r.set(key, json.dumps(value, ensure_ascii=False, default=str), ex=ex)
+    else:
+        _fallback_store[key] = json.dumps(value, ensure_ascii=False, default=str)
+
+
+async def get_json(key: str) -> Optional[dict | list]:
+    if _enabled and _pool:
+        r = redis.Redis(connection_pool=_pool)
+        raw = await r.get(key)
+        if raw:
+            return json.loads(raw)
+    else:
+        raw = _fallback_store.get(key)
+        if raw:
+            return json.loads(raw)
+    return None
+
+
+async def delete(key: str):
+    if _enabled and _pool:
+        r = redis.Redis(connection_pool=_pool)
+        await r.delete(key)
+    else:
+        _fallback_store.pop(key, None)
+
+
+async def keys(pattern: str) -> list[str]:
+    if _enabled and _pool:
+        r = redis.Redis(connection_pool=_pool)
+        return await r.keys(pattern)
+    return [k for k in _fallback_store if k.startswith(pattern.split(":")[0])]
+
+
+async def close():
+    global _pool
+    if _pool:
+        await _pool.disconnect()
+        _pool = None

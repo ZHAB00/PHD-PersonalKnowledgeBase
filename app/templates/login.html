@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>企业知识库 - 登录</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f0f2f5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .login-card {
+    background: #fff;
+    padding: 40px;
+    border-radius: 12px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+    width: 360px;
+    max-width: 90vw;
+  }
+  .login-card h1 {
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: #1a1a2e;
+  }
+  .login-card .subtitle {
+    font-size: 13px;
+    color: #8892a4;
+    margin-bottom: 28px;
+  }
+  .form-group { margin-bottom: 16px; }
+  .form-group label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: #374151;
+    margin-bottom: 6px;
+  }
+  .form-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .form-input:focus { border-color: #4f46e5; }
+  .btn-login {
+    width: 100%;
+    padding: 11px;
+    background: #4f46e5;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    margin-top: 8px;
+    transition: background 0.2s;
+  }
+  .btn-login:hover { background: #4338ca; }
+  .btn-login:disabled { opacity: 0.6; cursor: not-allowed; }
+  .error-msg {
+    color: #e53e3e;
+    font-size: 13px;
+    margin-top: 12px;
+    text-align: center;
+    display: none;
+  }
+  .error-msg.show { display: block; }
+</style>
+</head>
+<body>
+<div class="login-card">
+  <h1>企业知识库</h1>
+  <p class="subtitle">请登录以继续</p>
+  <div class="form-group">
+    <label>用户名</label>
+    <input type="text" id="username" class="form-input" placeholder="请输入用户名" autocomplete="username">
+  </div>
+  <div class="form-group">
+    <label>密码</label>
+    <input type="password" id="password" class="form-input" placeholder="请输入密码" autocomplete="current-password">
+  </div>
+  <button class="btn-login" id="btnLogin">登 录</button>
+  <p class="error-msg" id="errorMsg"></p>
+</div>
+
+<script>
+(function() {
+  const usernameEl = document.getElementById("username");
+  const passwordEl = document.getElementById("password");
+  const btnLogin = document.getElementById("btnLogin");
+  const errorMsg = document.getElementById("errorMsg");
+
+  // Check if already logged in
+  const token = localStorage.getItem("kb_token");
+  if (token) {
+    fetch("/api/auth/me", { headers: { "Authorization": "Bearer " + token } })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(() => { window.location.href = "/"; })
+      .catch(() => { localStorage.removeItem("kb_token"); });
+  }
+
+  async function doLogin() {
+    const username = usernameEl.value.trim();
+    const password = passwordEl.value;
+    if (!username || !password) return;
+
+    btnLogin.disabled = true;
+    errorMsg.classList.remove("show");
+
+    try {
+      const resp = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        errorMsg.textContent = data.detail || "登录失败";
+        errorMsg.classList.add("show");
+        btnLogin.disabled = false;
+        return;
+      }
+      localStorage.setItem("kb_token", data.access_token);
+      localStorage.setItem("kb_username", data.username);
+      localStorage.setItem("kb_user_id", data.user_id);
+      window.location.href = "/";
+    } catch (e) {
+      errorMsg.textContent = "网络错误，请重试";
+      errorMsg.classList.add("show");
+      btnLogin.disabled = false;
+    }
+  }
+
+  btnLogin.addEventListener("click", doLogin);
+  passwordEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") doLogin();
+  });
+  usernameEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") passwordEl.focus();
+  });
+})();
+</script>
+</body>
+</html>
