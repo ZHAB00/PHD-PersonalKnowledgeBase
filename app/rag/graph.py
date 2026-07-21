@@ -282,6 +282,18 @@ async def chat(
     messages.append({"role": "system", "content": f"当前知识库ID: {kb_id}。调用 doc_stats 或 search_knowledge_base 时必须使用此 kb_id。"})
     if memory_ctx:
         messages.append({"role": "system", "content": memory_ctx})
+    # GraphRAG: inject knowledge graph evidence if enabled
+    if enable_graphrag:
+        try:
+            from app.rag.graph_rag import retrieve_graph_evidence, format_graph_evidence
+            graph_evidence = await retrieve_graph_evidence(query=message, kb_id=kb_id, max_evidence=8)
+            if graph_evidence:
+                graph_ctx = format_graph_evidence(graph_evidence)
+                if graph_ctx:
+                    messages.append({"role": "system", "content": graph_ctx})
+                    logger.info(f"GraphRAG: injected {len(graph_evidence)} evidence items")
+        except Exception as e:
+            logger.warning(f"GraphRAG evidence failed: {e}")
     for h in history_budgeted:
         messages.append(h)
     messages.append({"role": "user", "content": user_prompt})
@@ -372,6 +384,18 @@ async def chat_stream(
     messages.append({"role": "system", "content": f"当前知识库ID: {kb_id}。调用 doc_stats 或 search_knowledge_base 时必须使用此 kb_id。"})
     if memory_ctx:
         messages.append({"role": "system", "content": memory_ctx})
+    # GraphRAG: inject knowledge graph evidence if enabled
+    if enable_graphrag:
+        try:
+            from app.rag.graph_rag import retrieve_graph_evidence, format_graph_evidence
+            graph_evidence = await retrieve_graph_evidence(query=message, kb_id=kb_id, max_evidence=8)
+            if graph_evidence:
+                graph_ctx = format_graph_evidence(graph_evidence)
+                if graph_ctx:
+                    messages.append({"role": "system", "content": graph_ctx})
+                    logger.info(f"GraphRAG: injected {len(graph_evidence)} evidence items")
+        except Exception as e:
+            logger.warning(f"GraphRAG evidence failed: {e}")
     for h in history_budgeted:
         messages.append(h)
     messages.append({"role": "user", "content": user_prompt})

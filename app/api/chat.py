@@ -47,14 +47,16 @@ async def send_message_stream(
     user_id: str = Form("default"),
     top_k: int = Form(5),
     rerank_strategy: str = Form("none"),
+    enable_graphrag: str = Form("true"),
 ):
+    graphrag_enabled = enable_graphrag.lower() == "true"
     if not message.strip():
         raise HTTPException(400, "消息不能为空")
 
     effective_user = _get_user_id(request, user_id)
 
     async def generate():
-        async for chunk in chat_stream(session_id, message, kb_id, tenant_id, top_k, rerank_strategy, effective_user):
+        async for chunk in chat_stream(session_id, message, kb_id, tenant_id, top_k, rerank_strategy, graphrag_enabled, effective_user):
             yield f"data: {chunk}\n\n"
         yield "data: [DONE]\n\n"
 
