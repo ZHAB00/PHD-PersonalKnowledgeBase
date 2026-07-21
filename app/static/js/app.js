@@ -208,7 +208,7 @@
           if (dt.startsWith("__TOOL_RESULT__:")) continue;
           if (dt.startsWith("__SOURCES__:")) {
             console.log("GOT SOURCES:", dt.substring(0, 150));
-            try { var srcs = JSON.parse(dt.slice(13)); console.log("SRCS parsed, count:", srcs.length); renderSources(srcs); } catch(e) { console.log("SRCS parse error:", e); }
+            try { var srcs = JSON.parse(dt.slice(12)); console.log("SRCS parsed, count:", srcs.length); renderSources(srcs); } catch(e) { console.log("SRCS parse error:", e); }
             continue;
           }
           full += dt;

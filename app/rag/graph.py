@@ -1,4 +1,4 @@
-ï»¿"""RAG chat engine v4: Tool-first architecture â€” RAG as a tool, not pre-fetch
+"""RAG chat engine v4: Tool-first architecture ¡ª RAG as a tool, not pre-fetch
 
 Flow:
   1. User message arrives
@@ -150,7 +150,7 @@ async def _agent_loop(
             tool_messages.append(tool_msg_assistant)
             tool_messages.append(tool_msg_result)
 
-    return "æŠ±æ­‰ï¼Œå¤„ç†è¶…æ—¶ï¼Œè¯·å°è¯•ç®€åŒ–æ‚¨çš„é—®é¢˜ã€‚", tool_messages
+    return "±§Ç¸£¬´¦Àí³¬Ê±£¬Çë³¢ÊÔ¼ò»¯ÄúµÄÎÊÌâ¡£", tool_messages
 
 
 # ============================================================
@@ -165,7 +165,7 @@ async def _after_response_tasks(session_id: str, user_id: str, history: list[dic
             if summary:
                 imp = await score_importance(summary)
                 await store_long_term_memory(
-                    user_id=user_id, content=f"[ä¼šè¯æ‘˜è¦] {summary}",
+                    user_id=user_id, content=f"[»á»°ÕªÒª] {summary}",
                     memory_type="summary", importance=imp, session_id=session_id,
                 )
         except Exception as e:
@@ -233,10 +233,10 @@ async def chat(
     Knowledge questions trigger search_knowledge_base tool automatically.
     """
     # Fast path: file listing queries bypass LLM (deterministic, no hallucination risk)
-    file_list_patterns = ["æœ‰å“ªäº›æ–‡æ¡£", "æœ‰å“ªäº›æ–‡ä»¶", "æ–‡ä»¶åˆ—è¡¨", "æ–‡æ¡£åˆ—è¡¨", "å‡ ä¸ªæ–‡æ¡£",
-                          "å‡ ä¸ªæ–‡ä»¶", "åˆ—å‡ºæ–‡ä»¶", "åˆ—å‡ºæ–‡æ¡£", "ä»€ä¹ˆæ–‡ä»¶", "ä»€ä¹ˆæ–‡æ¡£",
-                          "å“ªäº›æ–‡æ¡£", "å“ªäº›æ–‡ä»¶", "å·¥ä½œåŒºæœ‰", "æ–‡æ¡£ç»Ÿè®¡", "æ–‡ä»¶ç»Ÿè®¡",
-                          "æŸ¥ä¸€ä¸‹æœ‰å“ªäº›", "çœ‹çœ‹æœ‰å“ªäº›"]
+    file_list_patterns = ["ÓĞÄÄĞ©ÎÄµµ", "ÓĞÄÄĞ©ÎÄ¼ş", "ÎÄ¼şÁĞ±í", "ÎÄµµÁĞ±í", "¼¸¸öÎÄµµ",
+                          "¼¸¸öÎÄ¼ş", "ÁĞ³öÎÄ¼ş", "ÁĞ³öÎÄµµ", "Ê²Ã´ÎÄ¼ş", "Ê²Ã´ÎÄµµ",
+                          "ÄÄĞ©ÎÄµµ", "ÄÄĞ©ÎÄ¼ş", "¹¤×÷ÇøÓĞ", "ÎÄµµÍ³¼Æ", "ÎÄ¼şÍ³¼Æ",
+                          "²éÒ»ÏÂÓĞÄÄĞ©", "¿´¿´ÓĞÄÄĞ©"]
     q = message.strip().lower()
     if any(p in q for p in file_list_patterns):
         import json as _json
@@ -245,9 +245,9 @@ async def chat(
         fl = result.get("file_list", [])
         if fl:
             fls = "\n".join(str(i+1) + ". " + f for i, f in enumerate(fl))
-            ans = "å½“å‰çŸ¥è¯†åº“å…±æœ‰ " + str(result.get("doc_count", len(fl))) + " ä¸ªæ–‡ä»¶ï¼š\n\n" + fls
+            ans = "µ±Ç°ÖªÊ¶¿â¹²ÓĞ " + str(result.get("doc_count", len(fl))) + " ¸öÎÄ¼ş£º\n\n" + fls
         else:
-            ans = "å½“å‰çŸ¥è¯†åº“æš‚æ— æ–‡æ¡£ã€‚"
+            ans = "µ±Ç°ÖªÊ¶¿âÔİÎŞÎÄµµ¡£"
         history = await _get_history(session_id)
         history.append({"role": "user", "content": message})
         history.append({"role": "assistant", "content": ans})
@@ -279,14 +279,14 @@ async def chat(
     history_budgeted = apply_token_budget(llm_history)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     # Inject current KB context so LLM knows which KB to query
-    messages.append({"role": "system", "content": f"å½“å‰çŸ¥è¯†åº“ID: {kb_id}ã€‚è°ƒç”¨ doc_stats æˆ– search_knowledge_base æ—¶å¿…é¡»ä½¿ç”¨æ­¤ kb_idã€‚"})
+    messages.append({"role": "system", "content": f"µ±Ç°ÖªÊ¶¿âID: {kb_id}¡£µ÷ÓÃ doc_stats »ò search_knowledge_base Ê±±ØĞëÊ¹ÓÃ´Ë kb_id¡£"})
     if memory_ctx:
         messages.append({"role": "system", "content": memory_ctx})
     # GraphRAG: inject knowledge graph evidence if enabled
     if enable_graphrag:
         try:
             from app.rag.graph_rag import retrieve_graph_evidence, format_graph_evidence
-            graph_evidence = await retrieve_graph_evidence(query=message, kb_id=kb_id, max_evidence=8)
+            graph_evidence = retrieve_graph_evidence(query=message, kb_id=kb_id, max_evidence=8)
             if graph_evidence:
                 graph_ctx = format_graph_evidence(graph_evidence)
                 if graph_ctx:
@@ -381,14 +381,14 @@ async def chat_stream(
     history_budgeted = apply_token_budget(llm_history)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     # Inject current KB context so LLM knows which KB to query
-    messages.append({"role": "system", "content": f"å½“å‰çŸ¥è¯†åº“ID: {kb_id}ã€‚è°ƒç”¨ doc_stats æˆ– search_knowledge_base æ—¶å¿…é¡»ä½¿ç”¨æ­¤ kb_idã€‚"})
+    messages.append({"role": "system", "content": f"µ±Ç°ÖªÊ¶¿âID: {kb_id}¡£µ÷ÓÃ doc_stats »ò search_knowledge_base Ê±±ØĞëÊ¹ÓÃ´Ë kb_id¡£"})
     if memory_ctx:
         messages.append({"role": "system", "content": memory_ctx})
     # GraphRAG: inject knowledge graph evidence if enabled
     if enable_graphrag:
         try:
             from app.rag.graph_rag import retrieve_graph_evidence, format_graph_evidence
-            graph_evidence = await retrieve_graph_evidence(query=message, kb_id=kb_id, max_evidence=8)
+            graph_evidence = retrieve_graph_evidence(query=message, kb_id=kb_id, max_evidence=8)
             if graph_evidence:
                 graph_ctx = format_graph_evidence(graph_evidence)
                 if graph_ctx:
@@ -439,23 +439,8 @@ async def chat_stream(
                 full_answer += chunk
                 yield chunk
 
-        # Extract and yield sources from tool results
-        import json as _json
-        sources_data = []
-        for tc in stream_tool_calls:
-            if tc.tool_name == "search_knowledge_base" and tc.result:
-                try:
-                    res = _json.loads(tc.result) if isinstance(tc.result, str) else tc.result
-                    results = res.get("results", []) if isinstance(res, dict) else []
-                    for r in results:
-                        sources_data.append({
-                            "filename": r.get("filename", ""),
-                            "content": r.get("content", "")[:200],
-                            "score": r.get("score", 0.0),
-                        })
-                except Exception:
-                    pass
-        yield "__SOURCES__:" + _json.dumps(sources_data, ensure_ascii=False)
+        # Final sources yield (after all tool results processed)
+        yield _yield_sources(stream_tool_calls)
 
         # Save history with tool calls
         tc_list = [tc.model_dump() for tc in stream_tool_calls]
@@ -475,7 +460,7 @@ async def chat_stream(
         logger.error(f"Stream error: {e}")
         # Yield any sources we have before sending the error
         yield _yield_sources(stream_tool_calls)
-        yield f"AI æœåŠ¡æš‚æ—¶ä¸å¯ç”¨: {str(e)}"
+        yield f"AI ·şÎñÔİÊ±²»¿ÉÓÃ: {str(e)}"
 
 
 async def get_chat_history(session_id: str) -> list[dict]:

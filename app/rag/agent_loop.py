@@ -125,6 +125,14 @@ async def agent_loop_stream(
         asst_msg = {"role": "assistant", "content": None, "tool_calls": all_tool_calls}
         if round_reasoning:
             asst_msg["reasoning_content"] = round_reasoning
+        else:
+            # DeepSeek thinking mode: ensure reasoning_content continuity in the chain
+            has_prior_rc = any(
+                m.get("role") == "assistant" and m.get("reasoning_content")
+                for m in messages
+            )
+            if has_prior_rc:
+                asst_msg["reasoning_content"] = ""
         messages.append(asst_msg)
         for _, tc_data in sorted_tcs:
             tc_id = tc_data["id"]
