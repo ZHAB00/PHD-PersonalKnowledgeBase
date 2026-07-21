@@ -659,6 +659,20 @@ body {
 .message-tool .tool-icon { font-size: 13px; flex-shrink: 0; }
 .message-tool .tool-label { white-space: nowrap; }
 .message-tool.tool-done { color: #16a34a; }
+/* Agent thinking bubble */
+.message.assistant.thinking {
+  opacity: 0.85;
+  font-size: 13px;
+}
+.message.assistant.thinking .message-avatar {
+  background: #e0e7ff;
+  color: #4f46e5;
+}
+.message.assistant.thinking .thinking-label {
+  color: #64748b;
+  font-style: italic;
+}
+
 
 /* ===== DeepSeek-style sidebar ===== */
 .btn-new-chat {

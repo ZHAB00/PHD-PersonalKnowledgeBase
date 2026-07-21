@@ -166,13 +166,35 @@
       }).catch(function(){});
     }
 
-    var ai = document.createElement("div");
-    ai.className = "message assistant";
-    ai.innerHTML = '<div class="message-avatar">AI</div><div class="message-content"><p class="stream-text">...</p></div>';
-    $("chatMessages").appendChild(ai);
-    var st = ai.querySelector(".stream-text");
+    // --- dynamic bubbles: one per agent round ---
+    var toolRoundDiv = null;
+    var answerDiv = null;
+    var inAnswer = false;
+    var full = "";
+    var roundIdx = 0;
+
+    function mkThink() {
+      var d = document.createElement("div");
+      d.className = "message assistant thinking";
+      d.innerHTML = '<div class="message-avatar">&#128269;</div>' +
+        '<div class="message-content"><div class="thinking-label">正在分析问题...</div></div>';
+      var cm = document.getElementById("chatMessages");
+      if (cm) { cm.appendChild(d); stb(); }
+      return d;
+    }
+
+    function mkAnswer() {
+      var d = document.createElement("div");
+      d.className = "message assistant";
+      d.innerHTML = '<div class="message-avatar">AI</div>' +
+        '<div class="message-content"><p class="stream-text"></p></div>';
+      var cm = document.getElementById("chatMessages");
+      if (cm) { cm.appendChild(d); stb(); }
+      return d;
+    }
+
     state.streaming = true;
-    var sb = $("sendBtn"); if (sb) sb.disabled = true;
+    var sb = document.getElementById("sendBtn"); if (sb) sb.disabled = true;
 
     try {
       var p = new URLSearchParams();
@@ -187,7 +209,7 @@
 
       var reader = resp.body.getReader();
       var dec = new TextDecoder("utf-8");
-      var buf = "", full = "";
+      var buf = "";
 
       while (true) {
         var result = await reader.read();
@@ -200,31 +222,54 @@
           if (!ln.startsWith("data: ")) continue;
           var dt = ln.slice(6);
           if (dt === "[DONE]") break;
-          if (dt.startsWith("__REASONING__:")) { console.log("SKIP reason"); continue; }
-          if (dt.startsWith("__TOOL_CALL__:")) { console.log("TOOL");
-            try { var tc = JSON.parse(dt.slice(14)); atb(tc.name); } catch(e) {}
+          if (dt.startsWith("__REASONING__:")) { continue; }
+          if (dt.startsWith("__TOOL_CALL__:")) {
+            if (inAnswer) { inAnswer = false; full = ""; roundIdx++; }
+            if (!toolRoundDiv || toolRoundDiv._roundIdx !== roundIdx) {
+              toolRoundDiv = mkThink();
+              toolRoundDiv._roundIdx = roundIdx;
+            }
+            try {
+              var tc = JSON.parse(dt.slice(14));
+              var lbl = toolRoundDiv.querySelector(".thinking-label");
+              if (lbl) {
+                var tools = JSON.parse(lbl.getAttribute("data-tools") || "[]");
+                tools.push(tc.name);
+                lbl.setAttribute("data-tools", JSON.stringify(tools));
+                lbl.textContent = "调用工具: " + tools.join(", ");
+              }
+            } catch(e) {}
             continue;
           }
           if (dt.startsWith("__TOOL_RESULT__:")) continue;
           if (dt.startsWith("__SOURCES__:")) {
-            console.log("GOT SOURCES:", dt.substring(0, 150));
-            try { var srcs = JSON.parse(dt.slice(12)); console.log("SRCS parsed, count:", srcs.length); renderSources(srcs); } catch(e) { console.log("SRCS parse error:", e); }
+            try { var srcs = JSON.parse(dt.slice(12)); renderSources(srcs); } catch(e) {}
             continue;
           }
+          // text content -> answer bubble
+          if (!inAnswer) {
+            answerDiv = mkAnswer();
+            inAnswer = true;
+          }
           full += dt;
-          // Throttle: only re-render every ~80ms to avoid flashing
-          if (!ai._lastMd || Date.now() - ai._lastMd > 80) {
-            rmd(st, full); ai._lastMd = Date.now();
+          if (!answerDiv._lastMd || Date.now() - answerDiv._lastMd > 80) {
+            rmd(answerDiv.querySelector("p"), full);
+            answerDiv._lastMd = Date.now();
           }
           stb();
         }
         if (result.done) break;
       }
-      if (!full) { st.textContent = "(no response)"; }
-      else { rmd(st, full); }
+      if (!full) {
+        if (!inAnswer) { answerDiv = mkAnswer(); }
+        answerDiv.querySelector("p").textContent = "(no response)";
+      } else {
+        rmd(answerDiv.querySelector("p"), full);
+      }
       uts(state.sessionId);
     } catch(e) {
-      rmd(st, "**Error:** " + e.message);
+      if (!answerDiv) { answerDiv = mkAnswer(); }
+      rmd(answerDiv.querySelector("p"), "**Error:** " + e.message);
     } finally {
       state.streaming = false; if (sb) sb.disabled = false;
     }
