@@ -91,3 +91,178 @@ with open("app.js", "w", encoding="utf-8") as f:
 
 *报告生成时间: 2026-07-09*
 *关联文件: app/static/js/app.js, app/templates/index.html, OPERATIONS.md*
+
+---
+
+# Bug 报告：Qdrant 大批量 upsert 导致 WinError 10053 连接重置
+
+## 概述
+
+2026-07-10，上传大文件"aigent开发面试问答集.md"（1210 chunks）时，embedding 完成后向 Qdrant upsert 全部 1210 个 2560 维向量点时，Windows TCP 层抛出 `[WinError 10053]`，导致文档处理失败。
+
+## 根因
+
+`vector_store.upsert_chunks()` 将所有 1210 个 points 一次性 `client.upsert()` 写入 Qdrant。Qdrant 处理不过来，Windows TCP 连接被 RST。
+
+### 排查过程
+
+| 假设 | 测试 | 结论 |
+|------|------|------|
+| Ollama embedding 超时 | 200 texts 一次请求成功 | 不是 |
+| TCP 端口耗尽 | Session 复用连接仍失败 | 不是 |
+| 特定 chunk 内容 | 分批 50 chunks 全成功 | 不是 |
+| Qdrant 维度不匹配 | 2560 维，匹配 | 不是 |
+| **Qdrant 大批量 upsert** | 1210 随机向量复现 10053 | **根因** |
+
+## 修复方案
+
+分批 upsert 到 Qdrant，每批 200 个 points：
+
+`upsert_chunks` 分批 upsert，每批 200 个 points。
+
+## 教训
+
+- 错误提示"软件中止连接"的软件可能是 Qdrant 而非 Ollama
+- 大向量批量写入 Qdrant 需分批
+- 用独立最小复现代码绕过 embedding 直接测 Qdrant
+
+## 关键代码
+
+### 修复前（问题代码）
+
+`app/core/vector_store.py` — `upsert_chunks()`:
+
+```python
+vectors = embed_texts(texts)
+points = []
+for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
+    points.append(PointStruct(...))
+client.upsert(collection_name=col_name, points=points)  # 1210 points 一次写入
+return len(points)
+```
+
+### 修复后
+
+```python
+vectors = embed_texts(texts)
+points = []
+for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
+    points.append(PointStruct(...))
+# Batch upsert to avoid Qdrant connection reset
+BATCH = 200
+for i in range(0, len(points), BATCH):
+    batch = points[i:i + BATCH]
+    client.upsert(collection_name=col_name, points=batch)
+return len(points)
+```
+
+### 验证代码
+
+```python
+# 复现问题：1210 个点一次性 upsert -> 10053
+client.upsert(collection_name="kb_4274f071-de4", points=points)
+
+# 修复后：分批 200 个 -> 全部成功
+for i in range(0, len(points), 200):
+    client.upsert(collection_name="kb_4274f071-de4", points=points[i:i+200])
+```
+
+*2026-07-10 | app/core/vector_store.py*
+
+
+---
+
+# Bug 报告：对话历史丢失、Session标题???、图谱按钮无响应
+
+## 概述
+
+2026-07-12，多个前端功能失效的连锁 bug，根因是 JS 编码问题和后端逻辑遗漏。
+
+## Bug 1: lch() 缺少 async → 对话历史加载静默失败
+
+### 影响
+- 切换到历史会话时对话记录不显示
+- 刷新页面后对话记录消失
+
+### 根因
+app/static/js/app.js 中 lch() 函数体内使用了 await fetch() 但声明不是 async function。在非严格模式下不报错但 await 不等待 Promise。
+
+### 修复
+function lch() -> async function lch()
+
+### 代码位置
+app/static/js/app.js — lch() 函数声明
+
+---
+
+## Bug 2: synSessions() 从未被调用 → Session 标题不回显
+
+### 影响
+- 后端 SQLite 中已保存的 session 标题不会同步到前端 localStorage
+- 所有历史对话标题显示为时间戳或 ???
+
+### 根因
+synSessions() 函数定义存在，但初始化链中从未调用它。
+
+### 修复
+在 lkl().then(...) 前添加 synSessions() 调用
+
+### 代码位置
+app/static/js/app.js — 初始化链（IIFE 底部）
+
+---
+
+## Bug 3: 标题 API 不保存到 SQLite
+
+### 影响
+生成标题后仅保存在浏览器 localStorage，后端 sessions 表为空。换浏览器/清除缓存后标题丢失。
+
+### 修复
+在 /api/chat/title 端点生成标题后调用 save_session()
+
+### 代码位置
+app/api/chat.py — generate_title() 函数
+
+---
+
+## Bug 4: 图谱按钮 window 绑定缺失 → onclick 报错
+
+### 影响
+图谱刷新和构建按钮点击后报 Uncaught ReferenceError
+
+### 修复
+添加 window.refreshGraph/buildGraph/renderGraphView 全局绑定
+
+### 代码位置
+app/static/js/app.js — IIFE 结尾
+
+---
+
+## Bug 5: encodeURIComponent 被截断
+
+### 影响
+图谱 API 请求 URL 编码失败
+
+### 修复
+全局替换 encodeURIComponen 为完整函数名
+
+### 代码位置
+app/static/js/app.js — buildGraph() 和 renderGraphView()
+
+---
+
+## Bug 6: 图谱 nav 互斥缺失
+
+### 影响
+点击图谱按钮后不亮，视图切换不正确
+
+### 修复
+在 switchView() 中添加 graph 分支
+
+### 代码位置
+app/static/js/app.js — switchView() 函数
+
+---
+
+*报告时间: 2026-07-12*
+*关联文件: app/static/js/app.js, app/api/chat.py, app/rag/graph.py*

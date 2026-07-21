@@ -11,13 +11,14 @@ from app.core.document_parser import parse_document
 from app.core.chunker import build_chunks
 from app.core import vector_store
 from app.core import cache
+from app.rag.graph_rag import ingest_chunk_to_graph
 from app.models.document import DocumentInfo, DocumentStatus, DocumentType, DocumentUploadResponse
 
 logger = logging.getLogger(__name__)
 
 TASK_TTL = 86400
 MAX_CONCURRENT = 2       # max concurrent embedding tasks (Ollama limit)
-RETRY_COUNT = 3          # retry on embedding failure
+RETRY_COUNT = 1          # retry on embedding failure
 RETRY_DELAY = 2.0        # seconds between retries
 
 # Semaphore to limit concurrent document processing
@@ -59,6 +60,9 @@ async def _process_task(task_id: str, filepath: str | Path, filename: str, kb_id
                 c.metadata.kb_id = kb_id
             doc_info.total_chunks = len(chunks)
 
+            # Step 2.5: GraphRAG entity extraction (async fire-and-forget, best-effort)
+            asyncio.create_task(_ingest_graph_async(chunks, kb_id, task_id, filename))
+
             # Step 3: Embed + Upsert with retry
             count = await _upsert_with_retry(chunks, kb_id, filename)
             doc_info.status = DocumentStatus.READY
@@ -81,6 +85,30 @@ async def _process_task(task_id: str, filepath: str | Path, filename: str, kb_id
             doc_info.error_message = str(e)[:200]
             await cache.set_json(_task_key(kb_id, task_id), doc_info.model_dump(mode="json"), ex=TASK_TTL)
 
+
+
+
+async def _ingest_graph_async(chunks, kb_id: str, doc_id: str, filename: str):
+    """Extract entities from a sample of chunks and store in Neo4j."""
+    try:
+        from app.config import settings
+        if not settings.neo4j_enabled:
+            return
+        # Only process first N chunks to avoid excessive LLM calls
+        max_graph_chunks = 20
+        sample = chunks[:max_graph_chunks]
+        logger.info(f"GraphRAG: extracting from {len(sample)}/{len(chunks)} chunks of {filename}")
+        for c in sample:
+            chunk_id = f"{doc_id}:{c.metadata.chunk_index}"
+            await ingest_chunk_to_graph(
+                chunk_text=c.content,
+                chunk_id=chunk_id,
+                doc_id=doc_id,
+                kb_id=kb_id,
+            )
+        logger.info(f"GraphRAG: done for {filename} ({len(sample)} chunks processed)")
+    except Exception as e:
+        logger.warning(f"GraphRAG ingestion skipped for {filename}: {e}")
 
 async def _upsert_with_retry(chunks, kb_id: str, filename: str, max_retries: int = RETRY_COUNT) -> int:
     """Embed and upsert chunks with automatic retry on failure."""

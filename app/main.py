@@ -18,6 +18,7 @@ from app.api.chat import router as chat_router
 from app.api.evaluation import router as eval_router
 from app.api.kb import router as kb_router
 from app.api.auth import router as auth_router
+from app.api.graph_api import router as graph_router
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger(__name__)
@@ -107,6 +108,42 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Qdrant 连接失败（服务仍可启动）: {e}")
 
+
+    # Neo4j
+    import os
+    neo4j_bin = r'E:/neo4j-chs-community-2026.05.0-windows/bin/neo4j.bat'
+    if os.path.exists(neo4j_bin):
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1)
+        try:
+            s.settimeout(2)
+            s.connect(('127.0.0.1', 7687))
+            s.close()
+        except Exception:
+            s.close()
+            import subprocess
+            env = os.environ.copy()
+            env.setdefault('JAVA_HOME', r'D:\Program Files\Java\jdk-21')
+            subprocess.Popen([neo4j_bin, 'start'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+            import time
+            for _ in range(20):
+                try:
+                    s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s2.settimeout(1)
+                    s2.settimeout(2)
+                    s2.connect(('127.0.0.1', 7687))
+                    s2.close()
+                    break
+                except Exception:
+                    time.sleep(2)
+    # Warm up graph_rag
+    try:
+        from app.rag.graph_rag import _get_driver
+        _get_driver()
+    except Exception:
+        pass
+
     yield
 
     await cache.close()
@@ -162,6 +199,7 @@ app.include_router(documents_router)
 app.include_router(chat_router)
 app.include_router(eval_router)
 app.include_router(auth_router)
+app.include_router(graph_router)
 
 
 

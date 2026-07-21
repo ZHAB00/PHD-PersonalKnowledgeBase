@@ -32,6 +32,17 @@ class Settings(BaseSettings):
 
     # Data
     data_dir: str = "./data"
+    # Neo4j GraphRAG (knowledge graph)
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "kb123456"
+    neo4j_database: str = "neo4j"
+    neo4j_enabled: bool = True
+    # GraphRAG entity extraction: LLM model to use (falls back to deepseek_model)
+    graphrag_llm_model: str = "deepseek-chat"
+    # GraphRAG retrieval: max number of graph evidence nodes
+    graphrag_max_evidence: int = 8
+
 
     
     # JWT Auth

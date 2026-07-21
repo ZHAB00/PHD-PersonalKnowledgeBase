@@ -73,9 +73,9 @@ async def generate_title(data: dict):
     client = OpenAI(base_url=settings.deepseek_base_url, api_key=settings.deepseek_api_key)
     try:
         resp = client.chat.completions.create(
-            model=settings.deepseek_model,
+            model="deepseek-chat",  # non-thinking model for short title generation
             messages=[
-                {"role": "system", "content": "???????????????????????????????????15??????????????????"},
+                {"role": "system", "content": "用15个字以内总结以下用户消息作为对话标题，只返回标题文本，不要引号和其他内容"},
                 {"role": "user", "content": message[:200]},
             ],
             temperature=0.3,
@@ -83,13 +83,24 @@ async def generate_title(data: dict):
         )
         title = resp.choices[0].message.content.strip()
         # Clean up: remove quotes, truncate
-        title = title.replace('"', '').replace("'", '').replace("?", '').replace("?", '')
+        import re; title = re.sub(r'[#*_`~>|]', '', title).replace('"', '').replace("'", '').strip()
         if len(title) > 20:
             title = title[:20]
+        # Save title to sessions table
+        try:
+            from app.core.chat_store import save_session
+            save_session(session_id, title, "default")
+        except Exception:
+            pass
         return {"title": title or "???"}
     except Exception as e:
         # Fallback: use first 15 chars of message
         fallback = message[:15].replace("\n", " ")
+        try:
+            from app.core.chat_store import save_session
+            save_session(session_id, fallback, "default")
+        except Exception:
+            pass
         return {"title": fallback or "???"}
 
 @router.get("/history/{session_id}")
@@ -102,3 +113,23 @@ async def get_history(session_id: str):
 async def clear_history(session_id: str):
     await clear_chat_history(session_id)
     return {"status": "ok", "session_id": session_id}
+
+
+@router.get('/sessions')
+async def get_sessions(user_id: str = 'default'):
+    from app.core.chat_store import list_sessions as ls
+    return {'sessions': ls(user_id)}
+
+
+@router.post('/sessions/save')
+async def save_session_endpoint(data: dict):
+    from app.core.chat_store import save_session
+    save_session(data.get('id', ''), data.get('title', ''), data.get('user_id', 'default'))
+    return {'status': 'ok'}
+
+
+@router.delete('/sessions/{session_id}')
+async def delete_session_endpoint(session_id: str):
+    from app.core.chat_store import delete_session
+    delete_session(session_id)
+    return {'status': 'ok'}

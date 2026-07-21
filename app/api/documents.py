@@ -139,6 +139,7 @@ async def delete_document(task_id: str, kb_id: str = Query("default"), tenant_id
             file_path.unlink()
 
         await delete_task(kb_id, task_id)
+        asyncio.create_task(_cleanup_graph_for_doc(kb_id, info.filename))
         return {"status": "deleted", "task_id": task_id, "filename": info.filename}
 
     # Handle orphan deletion (no Redis record, just file)
@@ -147,6 +148,7 @@ async def delete_document(task_id: str, kb_id: str = Query("default"), tenant_id
         file_path = get_doc_dir(kb_id) / filename
         if file_path.exists():
             file_path.unlink()
+        asyncio.create_task(_cleanup_graph_for_doc(kb_id, filename))
         return {"status": "deleted", "task_id": task_id, "filename": filename}
 
     raise HTTPException(404, "任务不存在")
@@ -173,3 +175,50 @@ async def reindex_orphan(filename: str, kb_id: str = Query("default"), tenant_id
 
     result = await ingest_document(file_path, filename, kb_id=kb_id, tenant_id=tenant_id)
     return result
+
+
+async def _cleanup_graph_for_doc(kb_id: str, filename: str):
+    """Remove chunks for deleted doc. Keep entities if referenced by other docs."""
+    try:
+        from app.rag.graph_rag import _get_driver
+        from app.config import settings as s
+        driver = _get_driver()
+        with driver.session(database=s.neo4j_database) as session:
+            # Find chunks belonging to this doc
+            result = session.run(
+                "MATCH (c:Chunk {kb_id: $kb}) WHERE c.doc_id IS NOT NULL AND c.text IS NOT NULL RETURN c.id AS cid, c.doc_id AS did",
+                kb=kb_id
+            )
+            target_cids = set()
+            for rec in result:
+                did = rec["did"]
+                # Try to find the doc by filename in chunk text or doc_id
+                if _doc_matches(did, filename, rec.get("cid","")):
+                    target_cids.add(rec["cid"])
+            
+            if not target_cids:
+                return
+            
+            # Detach and delete only the target chunks
+            for cid in target_cids:
+                session.run(
+                    "MATCH (c:Chunk {id: $cid}) DETACH DELETE c",
+                    cid=cid
+                )
+            
+            # Clean orphan entities (no MENTIONED_IN left)
+            session.run(
+                "MATCH (e:Entity {kb_id: $kb}) WHERE NOT (e)-[:MENTIONED_IN]->(:Chunk) DETACH DELETE e",
+                kb=kb_id
+            )
+    except Exception:
+        pass
+
+
+def _doc_matches(doc_id: str, filename: str, chunk_id: str) -> bool:
+    """Check if a chunk belongs to the given document."""
+    fn_lower = filename.lower()
+    did_lower = doc_id.lower()
+    cid_lower = chunk_id.lower()
+    return fn_lower in did_lower or fn_lower in cid_lower or did_lower.startswith(fn_lower.split(".")[0])
+

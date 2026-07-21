@@ -413,3 +413,115 @@ egister_builtin_tools() 已无实际逻辑（tools 是模块级 @tool 装饰器�
 - node -c: PASS
 - Brace balance: {=232, }=232
 - 所有关键函数存在: buildUI, checkHealth, sendMessage, generateSessionId, loadKbList, loadChatHistory
+## 2026-07-09 18:00 - 删除文档确认弹窗改为自定义 Modal
+
+### 修改文件
+- app/static/js/app.js
+- app/templates/index.html (版本号)
+
+### 具体改动
+1. **dld 函数**: 将浏览器原生 confirm() 替换为自定义 confirmModal 弹窗
+   - 使用 Promise 等待用户点击确定/取消
+   - _confirmResolve 变量管理回调
+2. **新增事件绑定**: confirmCancel 和 confirmOk 按钮的 click 事件
+3. **版本号**: app.js?v=13 → v=14
+
+### 原因
+- 浏览器原生 confirm 对话框样式不可控，无法统一 UI 风格
+- 已有 confirmModal HTML 结构，复用即可
+## 2026-07-09 18:30 - 修复文档删除弹窗 + Ghost 删除逻辑
+
+### 修改文件
+- app/static/js/app.js
+- app/templates/index.html (v=18)
+- app/api/documents.py
+- app/core/vector_store.py
+
+### 具体改动
+1. **删除弹窗**: 浏览器原生 confirm() 替换为自定义 confirmModal，用回调模式（非 Promise）
+2. **Ghost 删除修复**: 原逻辑从 tasks 表查找任务再删向量，但 ghost 不在 tasks 里
+   - 改为 delete_by_filename() 直接用 filename 匹配 Qdrant 向量删除
+   - vector_store.py 新增 delete_by_filename 方法
+3. **前端事件**: confirmOk/confirmCancel 通过 on() 绑定 click 事件
+
+### 原因
+- Ghost 文档的向量数据残留，删除点击看似无反应（实际 API 返回 200 但向量没删，刷新后重新出现在列表）
+- 弹窗确认需要统一 UI 风格
+
+## 2026-07-10 17:00 - GraphRAG 知识图谱集成
+
+### 修改文件
+| 文件 | 改动 |
+|------|------|
+| pp/config.py | 新增 Neo4j + GraphRAG 配置项 (neo4j_uri, neo4j_password, ne4j_enabled, graphrag_*) |
+| pp/rag/graph_rag.py | **新建** - 实体关系抽取、Neo4j 存储、图谱检索、证据格式化 |
+| pp/rag/retriever.py | 集成 graph_rag import, enable_graphrag 参数, _graph_retrieve 函数 |
+| pp/workers/ingestion.py | 集成 _ingest_graph_async: 文档上传后自动抽取实体关系 |
+| 	ests/test_graph_rag.py | **新建** - 4 个测试 (连接/抽取/存储检索/统计) |
+
+### 具体改动
+
+#### 1. Neo4j 环境 (Java 21)
+- Neo4j 2026.05 Community 安装在 E:\neo4j-chs-community-2026.05.0-windows
+- 必须用 Java 21+ (D:\Program Files\Java\jdk-21), Java 17/8 不支持
+- 密码: neo4j/kb123456, 端口: bolt 7687, http 7474
+- 启动脚本: E:\neo4j-chs-community-2026.05.0-windows\start_neo4j.bat
+
+#### 2. graph_rag.py 核心模块
+- extract_entities_relations(): 用 DeepSeek LLM 从文档 chunk 抽取实体+关系
+- store_entities_relations(): 存入 Neo4j (Entity + RELATES_TO + Chunk)
+- etrieve_graph_evidence(): 按查询词匹配实体 -> 1-hop 邻居 -> 关联 chunk
+- ormat_graph_evidence(): 格式化为可读上下文
+- ingest_chunk_to_graph(): per-chunk 异步入库钩子
+- delete_kb_graph() / graph_stats(): 清理/统计
+
+#### 3. 检索增强
+- retriever.py 在 Rerank 后调用 _graph_retrieve() 注入图谱证据
+- 通过 enable_graphrag (默认 True) 控制开关
+- 图谱结果作为 SourceReference(filename="[知识图谱]") 合并到检索结果
+
+#### 4. Ingestion 流程
+- 文档上传后, _ingest_graph_async 自动抽取前 20 个 chunk 的实体
+- fire-and-forget 模式, 不阻塞 embedding/upsert
+
+### 测试结果
+- 37/37 passed (33 original + 4 graph_rag)
+
+## 2026-07-10 19:30 - GraphRAG 前端开关
+
+### 修改文件
+| 文件 | 改动 |
+|------|------|
+| pp/rag/graph.py | chat_sync/chat_stream 新增 enable_graphrag 参数，传递给 retrieve() |
+| pp/api/chat.py | send_message_stream 接收 enable_graphrag Form 参数 |
+| pp/static/js/app.js | state.graphRagEnabled + toggleGraphRag() + sendMessage 传参 |
+| pp/templates/index.html | chat-kb-bar 新增图谱增强 toggle 按钮 + CSS |
+
+### 具体改动
+1. **后端**: enable_graphrag (默认 True) 贯穿 chat_stream → retrieve → _graph_retrieve
+2. **前端**: 聊天输入栏上方知识库选择器旁边出现 sun icon 按钮，点击切换开关/关
+3. **默认开启**, 用户可随时关闭以跳过图谱检索, 提升速度
+
+### 测试结果
+- 37/37 passed
+
+## 2026-07-10 20:00 - 知识图谱可视化页面 (vis-network)
+
+### 修改文件
+| 文件 | 改动 |
+|------|------|
+| pp/api/graph_api.py | **新建** - GET /api/graph/data 返回 nodes+edges, GET /api/graph/stats |
+| pp/main.py | 注册 graph_router |
+| pp/templates/index.html | 新增导航按钮(知识图谱) + vis-network CDN + view-graph 区域 |
+| pp/static/js/app.js | renderGraphView() + refreshGraph() + 事件绑定 (v=30) |
+| pp/static/css/style.css | graph-toolbar, graph-container, graph-empty 样式 |
+
+### 具体改动
+1. **导航**: 侧边栏新增"知识图谱"按钮(节点图标), 点击切换到全屏力导向图
+2. **工具栏**: 知识库选择 + 实体搜索框 + 刷新按钮 + 实体/关系统计
+3. **力导向图**: vis-network 渲染, 节点按类型着色(模型蓝色/技术绿色/概念橙色...), 连线显示关系类型, 支持拖拽缩放, 双击节点搜索关联实体
+4. **API**: /api/graph/data?kb_id=xxx&search=xxx 返回 {nodes, edges}, 支持搜索过滤
+
+### 测试结果
+- 37/37 passed
+- Neo4j 数据: 5 entities + 3 relations (test_kb) 验证通过

@@ -1,4 +1,4 @@
-"""Retrieval pipeline: hybrid + query rewriting
+﻿"""Retrieval pipeline: hybrid + query rewriting
 
 References (RAG Best Practices Section 6):
   6.3 Weighted fusion (min-max norm + alpha mixing) as supplement to RRF
@@ -14,6 +14,7 @@ from app.core import vector_store
 from app.rag.hybrid_retriever import get_hybrid_retriever
 from app.rag.reranker import rerank
 from app.rag.hyde import generate_hypothetical_doc, should_trigger_hyde
+from app.rag.graph_rag import retrieve_graph_evidence, format_graph_evidence
 from app.models.chat import SourceReference
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ def retrieve(
     enable_rewrite: bool = True,
     rerank_strategy: str = "none",
     rerank_lambda: float = 0.7,
+    enable_graphrag: bool = True,
     recall_multiplier: int = 4,
 ) -> list[SourceReference]:
     """Main retrieval entry point: hybrid + query rewriting + optional reranker.
@@ -80,6 +82,15 @@ def retrieve(
     # Reranker: recall -> rerank -> top_k
     if rerank_strategy != "none" and len(results) > top_k:
         results = rerank(query, results, top_n=top_k, strategy=rerank_strategy, lambda_mult=rerank_lambda)
+
+    # GraphRAG: enrich with knowledge graph evidence
+    if enable_graphrag:
+        try:
+            graph_sources = _graph_retrieve(query, kb_id, tid)
+            if graph_sources:
+                results = results + graph_sources
+        except Exception as e:
+            logger.debug("GraphRAG retrieve skipped: %s", e)
 
     return results[:top_k]
 
@@ -210,7 +221,7 @@ def _extract_key_terms(text: str) -> str:
         return acronyms[-1]  # Return the last acronym (usually the main topic)
 
     # Match quoted terms
-    quoted = re.findall(r'["""](.+?)["禄]', text)
+    quoted = re.findall(r'["""](.+?)["绂刔', text)
     if quoted:
         return quoted[-1]
 
@@ -219,6 +230,29 @@ def _extract_key_terms(text: str) -> str:
     if words:
         return words[-1]
     return ""
+
+
+def _graph_retrieve(query: str, kb_id: str, tenant_id: str) -> list[SourceReference]:
+    """Retrieve graph evidence and convert to SourceReference format."""
+    try:
+        evidence = retrieve_graph_evidence(query, kb_id)
+        if not evidence:
+            return []
+        formatted = format_graph_evidence(evidence)
+        if not formatted:
+            return []
+        return [
+            SourceReference(
+                doc_id="graph_rag",
+                filename="[知识图谱]",
+                content=formatted,
+                score=0.85,
+                chunk_index=0,
+            )
+        ]
+    except Exception as e:
+        logger.warning("GraphRAG retrieval error: %s", e)
+        return []
 
 
 def rebuild_bm25_index(kb_id: str = "default", tenant_id: str = "default"):

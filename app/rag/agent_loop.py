@@ -69,10 +69,16 @@ async def agent_loop_stream(
 
         tool_calls_acc = {}
         finish_reason = None
+        round_reasoning = ""
 
         for chunk in stream:
             delta = chunk.choices[0].delta
             finish_reason = chunk.choices[0].finish_reason
+
+            # Capture reasoning_content for preservation in history
+            if getattr(delta, "reasoning_content", None):
+                round_reasoning += delta.reasoning_content
+                yield "__REASONING__:" + delta.reasoning_content
 
             if delta.tool_calls:
                 for tc in delta.tool_calls:
@@ -93,6 +99,9 @@ async def agent_loop_stream(
             return
 
         sorted_tcs = sorted(tool_calls_acc.items(), key=lambda x: x[0])
+        # Group all tool calls into a SINGLE assistant message (fixes reasoning_content 400 error)
+        all_tool_calls = []
+        tool_results = {}  # tc_id -> result string
         for _, tc_data in sorted_tcs:
             tool_name = tc_data["function"]["name"]
             try:
@@ -104,14 +113,22 @@ async def agent_loop_stream(
             yield f"__TOOL_CALL__:{json.dumps({'name': tool_name, 'args': args}, ensure_ascii=False)}"
 
             result = await execute_tool(tool_name, args, user_id=user_id)
-            yield f"__TOOL_RESULT__:{json.dumps({'name': tool_name, 'result': result[:500]}, ensure_ascii=False)}"
+            yield f"__TOOL_RESULT__:{json.dumps({'name': tool_name, 'result': result[:8000]}, ensure_ascii=False)}"
 
-            messages.append({
-                "role": "assistant", "content": None,
-                "tool_calls": [{"id": tc_data["id"], "type": "function",
-                                "function": {"name": tool_name, "arguments": tc_data["function"]["arguments"]}}],
+            all_tool_calls.append({
+                "id": tc_data["id"], "type": "function",
+                "function": {"name": tool_name, "arguments": tc_data["function"]["arguments"]}
             })
-            messages.append({"role": "tool", "tool_call_id": tc_data["id"], "content": result})
+            tool_results[tc_data["id"]] = result
+
+        # Single assistant message with all tool calls
+        asst_msg = {"role": "assistant", "content": None, "tool_calls": all_tool_calls}
+        if round_reasoning:
+            asst_msg["reasoning_content"] = round_reasoning
+        messages.append(asst_msg)
+        for _, tc_data in sorted_tcs:
+            tc_id = tc_data["id"]
+            messages.append({"role": "tool", "tool_call_id": tc_id, "content": tool_results.get(tc_id, "")})
 
     # Force final answer
     resp2 = client.chat.completions.create(
@@ -119,5 +136,8 @@ async def agent_loop_stream(
         temperature=0.3, max_tokens=2048, stream=True,
     )
     for chunk in resp2:
-        if chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+        delta = chunk.choices[0].delta
+        if getattr(delta, "reasoning_content", None):
+            yield "__REASONING__:" + delta.reasoning_content
+        if delta.content:
+            yield delta.content

@@ -1,4 +1,4 @@
-"""RAG chat engine v4: Tool-first architecture — RAG as a tool, not pre-fetch
+﻿"""RAG chat engine v4: Tool-first architecture — RAG as a tool, not pre-fetch
 
 Flow:
   1. User message arrives
@@ -29,6 +29,7 @@ from app.rag.memory import (
 from app.rag.tools import get_tools, execute_tool
 from app.models.chat import ChatResponse, SourceReference, ToolCallEvent
 from app.core import cache
+from app.core.chat_store import save_history, load_history, delete_history as delete_chat_history
 from app.prompts import SYSTEM_PROMPT, REFUSAL_RESPONSE
 
 logger = logging.getLogger(__name__)
@@ -51,12 +52,13 @@ def _history_key(session_id: str) -> str:
 
 
 async def _get_history(session_id: str) -> list[dict]:
-    data = await cache.get_json(_history_key(session_id))
-    return data if data else []
+    data = load_history(session_id)
+    # Preserve reasoning_content for deepseek-v4-flash thinking mode
+    return data
 
 
 async def _set_history(session_id: str, history: list[dict]):
-    await cache.set_json(_history_key(session_id), history, ex=CHAT_HISTORY_TTL)
+    save_history(session_id, history)
 
 
 def _count_turns(history: list[dict]) -> int:
@@ -222,6 +224,7 @@ async def chat(
     tenant_id: str = "default",
     top_k: int = 5,
     rerank_strategy: str = "none",
+    enable_graphrag: bool = True,
     user_id: str = "default",
 ) -> ChatResponse:
     """Unified chat: LLM decides whether to call tools (RAG search, memory, etc.).
@@ -263,16 +266,17 @@ async def chat(
 
     # Build messages: system prompt + tools available
     # Strip empty tool_calls from history (DeepSeek rejects tool_calls: [])
+    # Build LLM messages from a COPY -- keep original history intact for saving
+    llm_history = []
     for h in history:
-        tc = h.get("tool_calls")
-        if isinstance(tc, list):
-            if len(tc) == 0:
-                del h["tool_calls"]
-            elif tc and "tool_name" in tc[0]:
-                del h["tool_calls"]
+        hc = dict(h)
+        tc = hc.get("tool_calls")
+        if isinstance(tc, list) and (len(tc) == 0 or (tc and "tool_name" in tc[0])):
+            del hc["tool_calls"]
+        llm_history.append(hc)
 
     user_prompt = build_history_prompt(history, message, [], kb_id=kb_id)
-    history_budgeted = apply_token_budget(history)
+    history_budgeted = apply_token_budget(llm_history)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     # Inject current KB context so LLM knows which KB to query
     messages.append({"role": "system", "content": f"当前知识库ID: {kb_id}。调用 doc_stats 或 search_knowledge_base 时必须使用此 kb_id。"})
@@ -292,7 +296,10 @@ async def chat(
     # Save history (with tool calls for frontend display)
     tc_data = [tc.model_dump() for tc in _build_tool_call_events(tool_msgs)]
     history.append({"role": "user", "content": message})
-    history.append({"role": "assistant", "content": answer, "tool_calls": tc_data})
+    msg = {"role": "assistant", "content": answer}
+    if tc_data:
+        msg["tool_calls"] = tc_data
+    history.append(msg)
     await _set_history(session_id, history)
 
     # Background tasks
@@ -307,6 +314,28 @@ async def chat(
     )
 
 
+
+def _yield_sources(stream_tool_calls: list) -> str:
+    """Extract sources from tool call results and yield __SOURCES__: JSON."""
+    import json as _json
+    sources_data = []
+    for tc in stream_tool_calls:
+        if tc.tool_name == "search_knowledge_base" and tc.result:
+            try:
+                res = _json.loads(tc.result) if isinstance(tc.result, str) else tc.result
+                results = res.get("results", []) if isinstance(res, dict) else []
+                for r in results:
+                    sources_data.append({
+                        "filename": r.get("filename", ""),
+                        "content": r.get("content", "")[:200],
+                        "score": r.get("score", 0.0),
+                    })
+            except Exception:
+                pass
+    logger.info(f"Yield sources: {len(sources_data)} items from {len(stream_tool_calls)} tool calls")
+    return "__SOURCES__:" + _json.dumps(sources_data, ensure_ascii=False)
+
+
 async def chat_stream(
     session_id: str,
     message: str,
@@ -314,6 +343,7 @@ async def chat_stream(
     tenant_id: str = "default",
     top_k: int = 5,
     rerank_strategy: str = "none",
+    enable_graphrag: bool = True,
     user_id: str = "default",
 ) -> AsyncGenerator[str, None]:
     """Streaming chat: uses agent loop with tool call events for frontend."""
@@ -326,16 +356,17 @@ async def chat_stream(
         memories = await retrieve_long_term_memory(query=message, user_id=user_id, top_k=3)
         await cache.set_json(mem_cache_key, memories, ex=1800)
     memory_ctx = build_memory_context(memories)
+    # Build LLM messages from a COPY -- keep original history intact for saving
+    llm_history = []
     for h in history:
-        tc = h.get("tool_calls")
-        if isinstance(tc, list):
-            if len(tc) == 0:
-                del h["tool_calls"]
-            elif tc and "tool_name" in tc[0]:
-                del h["tool_calls"]
+        hc = dict(h)
+        tc = hc.get("tool_calls")
+        if isinstance(tc, list) and (len(tc) == 0 or (tc and "tool_name" in tc[0])):
+            del hc["tool_calls"]
+        llm_history.append(hc)
 
     user_prompt = build_history_prompt(history, message, [], kb_id=kb_id)
-    history_budgeted = apply_token_budget(history)
+    history_budgeted = apply_token_budget(llm_history)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     # Inject current KB context so LLM knows which KB to query
     messages.append({"role": "system", "content": f"当前知识库ID: {kb_id}。调用 doc_stats 或 search_knowledge_base 时必须使用此 kb_id。"})
@@ -345,14 +376,12 @@ async def chat_stream(
         messages.append(h)
     messages.append({"role": "user", "content": user_prompt})
 
-    # Yield sources placeholder
-    yield "__SOURCES__:[]"
-
     # Use agent loop with tool call events
     from app.rag.agent_loop import agent_loop_stream
     client = _get_deepseek_client(timeout=120.0)
     tool_msgs = []
     full_answer = ""
+    reasoning_content_acc = ""
     stream_tool_calls = []  # collect tool call info for history
 
     try:
@@ -374,18 +403,45 @@ async def chat_stream(
                 if stream_tool_calls:
                     try:
                         tr_data = json.loads(chunk[len("__TOOL_RESULT__:"):])
-                        stream_tool_calls[-1].result = tr_data.get("result", "")[:300]
+                        stream_tool_calls[-1].result = tr_data.get("result", "")[:8000]
                     except Exception:
                         pass
                 yield chunk
+                # Yield sources incrementally so frontend sees them even if later calls fail
+                yield _yield_sources(stream_tool_calls)
+            elif chunk.startswith("__REASONING__:"):
+                reasoning_content_acc += chunk[len("__REASONING__:"):]
             else:
                 full_answer += chunk
                 yield chunk
 
+        # Extract and yield sources from tool results
+        import json as _json
+        sources_data = []
+        for tc in stream_tool_calls:
+            if tc.tool_name == "search_knowledge_base" and tc.result:
+                try:
+                    res = _json.loads(tc.result) if isinstance(tc.result, str) else tc.result
+                    results = res.get("results", []) if isinstance(res, dict) else []
+                    for r in results:
+                        sources_data.append({
+                            "filename": r.get("filename", ""),
+                            "content": r.get("content", "")[:200],
+                            "score": r.get("score", 0.0),
+                        })
+                except Exception:
+                    pass
+        yield "__SOURCES__:" + _json.dumps(sources_data, ensure_ascii=False)
+
         # Save history with tool calls
         tc_list = [tc.model_dump() for tc in stream_tool_calls]
         history.append({"role": "user", "content": message})
-        history.append({"role": "assistant", "content": full_answer, "tool_calls": tc_list})
+        msg = {"role": "assistant", "content": full_answer}
+        if reasoning_content_acc:
+            msg["reasoning_content"] = reasoning_content_acc
+        if tc_list:
+            msg["tool_calls"] = tc_list
+        history.append(msg)
         await _set_history(session_id, history)
 
         # Background
@@ -393,6 +449,8 @@ async def chat_stream(
         asyncio.create_task(_after_response_tasks(session_id, user_id, history))
     except Exception as e:
         logger.error(f"Stream error: {e}")
+        # Yield any sources we have before sending the error
+        yield _yield_sources(stream_tool_calls)
         yield f"AI 服务暂时不可用: {str(e)}"
 
 
@@ -401,4 +459,4 @@ async def get_chat_history(session_id: str) -> list[dict]:
 
 
 async def clear_chat_history(session_id: str):
-    await cache.delete(_history_key(session_id))
+    delete_chat_history(session_id)

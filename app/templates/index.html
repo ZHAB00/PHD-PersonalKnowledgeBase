@@ -1,11 +1,17 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>企业知识库</title>
-<link rel="stylesheet" href="/static/css/style.css?v=7">
-</head>
+<link rel="stylesheet" href="/static/css/style.css?v=22">
+  <script src="https://unpkg.com/vis-network@9.1.6/dist/vis-network.min.js"></script>
+  <link href="https://unpkg.com/vis-network@9.1.6/dist/vis-network.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+    </head>
 <body>
 <div id="app">
 
@@ -20,6 +26,12 @@
     <div class="session-items" id="sessionItems"></div>
   </div>
   <div class="sidebar-footer">
+    
+    <button class="nav-item-side" id="navGraph">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v5"/><path d="M6.5 17.5 11 12"/><path d="M13 12l4.5 5.5"/></svg>
+      <span>知识图谱</span>
+    </button>
+
     <button class="nav-item-side" id="navDocuments">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       <span>文档管理</span>
@@ -38,6 +50,10 @@
       <div class="chat-kb-bar" id="chatKbBar">
         <span class="chat-kb-label">知识库：</span>
         <select class="chat-kb-select" id="chatKbSelect"><option value="default">默认知识库</option></select>
+        <button class="kb-graphrag-toggle active" id="graphRagToggle" onclick="toggleGraphRag()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v5"/><path d="M6.5 17.5 11 12"/><path d="M13 12l4.5 5.5"/></svg>
+          图谱
+        </button>
       </div>
       <div class="chat-input-area">
         <textarea class="chat-input" id="chatInput" rows="1" placeholder="输入你的问题..." disabled></textarea>
@@ -66,14 +82,26 @@
       <div class="upload-icon">
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
       </div>
-      <p class="upload-text">拖拽文件到此处，或<a href="#" id="uploadLink">点击选择文件</a></p>
+      <p class="upload-text">拖拽文件到此处，<a href="#" id="uploadLink">点击选择文件</a></p>
       <p class="upload-hint">支持 PDF、DOCX、MD、TXT 格式</p>
       <input type="file" id="fileInput" accept=".pdf,.docx,.md,.txt" multiple hidden>
     </div>
     <div class="doc-list" id="docList">
-      <div class="doc-list-header"><h3>已上传文档</h3><span class="doc-count" id="docCount">0 份</span></div>
+      <div class="doc-list-header"><h3>已上传文档</h3><span class="doc-count" id="docCount">0 个</span></div>
       <div class="doc-items" id="docItems"></div>
     </div>
+  </section>
+  <section id="view-graph" class="view">
+    <div class="graph-toolbar">
+      <div class="kb-selector" id="graphKbSelector">
+        <select id="graphKbSelect"><option value="default">默认知识库</option></select>
+      </div>
+      <input type="text" class="graph-search" id="graphSearch" placeholder="搜索实体...">
+      <button class="btn btn-sm" id="graphRefresh">刷新</button>
+      <button class="btn btn-sm btn-primary" id="graphBuild">构建图谱</button>
+      <span class="graph-stats" id="graphStats"></span>
+    </div>
+    <div class="graph-container" id="graphContainer"></div>
   </section>
 </main>
 
@@ -126,6 +154,8 @@
 var _t = localStorage.getItem("kb_token");
 if (!_t) { window.location.href = "/login"; }
 </script>
-<script src="/static/js/app.js?v=7"></script>
+<script src="/static/js/app.js?v=47"></script>
 </body>
 </html>
+
+

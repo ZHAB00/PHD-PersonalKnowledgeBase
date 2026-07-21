@@ -2,6 +2,8 @@
 from __future__ import annotations
 import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 from uuid import uuid4
 
 from qdrant_client import QdrantClient
@@ -75,7 +77,11 @@ def upsert_chunks(chunks: list[DocumentChunk], kb_id: str = DEFAULT_KB) -> int:
                 "kb_id": kb_id,
             },
         ))
-    client.upsert(collection_name=col_name, points=points)
+        # Batch upsert to avoid Qdrant connection reset on large payloads
+    BATCH = 200
+    for i in range(0, len(points), BATCH):
+        batch = points[i:i + BATCH]
+        client.upsert(collection_name=col_name, points=batch)
     return len(points)
 
 
@@ -116,9 +122,24 @@ def delete_document(doc_id: str, kb_id: str = DEFAULT_KB, tenant_id: Optional[st
         must_filters.append(models.FieldCondition(key="tenant_id", match=models.MatchValue(value=tenant_id)))
     try:
         client.delete(collection_name=col_name, points_selector=models.FilterSelector(filter=models.Filter(must=must_filters)))
-    except Exception:
-        pass
+        logger.info(f"Deleted vectors for doc:{doc_id} from kb:{kb_id}")
+    except Exception as e:
+        logger.warning(f"Failed to delete vectors for doc:{doc_id}: {e}")
 
+
+
+def delete_by_filename(filename: str, kb_id: str = DEFAULT_KB, tenant_id: Optional[str] = None):
+    """Delete all vectors matching a filename (for ghost cleanup)."""
+    client = _get_client()
+    col_name = _collection_name(kb_id)
+    must_filters = [models.FieldCondition(key="filename", match=models.MatchValue(value=filename))]
+    if tenant_id:
+        must_filters.append(models.FieldCondition(key="tenant_id", match=models.MatchValue(value=tenant_id)))
+    try:
+        result = client.delete(collection_name=col_name, points_selector=models.FilterSelector(filter=models.Filter(must=must_filters)))
+        logger.info(f"Deleted vectors for filename:{filename} from kb:{kb_id}, status:{result.status}")
+    except Exception as e:
+        logger.warning(f"Failed to delete vectors by filename {filename}: {e}")
 
 def count_documents(kb_id: str = DEFAULT_KB, tenant_id: Optional[str] = None) -> int:
     client = _get_client()

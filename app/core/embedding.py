@@ -42,11 +42,32 @@ def embed_text(text: str) -> list[float]:
     return emb.embed_query(text)
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Embed multiple text strings."""
-    emb = get_embeddings()
-    return emb.embed_documents(texts)
-
+def embed_texts(texts: list[str], batch_size: int = 500) -> list[list[float]]:
+    """Embed texts in large batches. Ollama handles up to 512 items fine."""
+    import time, requests
+    from app.config import settings
+    base = (settings.embedding_base_url or "http://localhost:11434").replace("/v1", "")
+    url = f"{base}/api/embed"
+    all_vectors = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        for attempt in range(3):
+            try:
+                resp = requests.post(url, json={"model": "qwen3-embedding:4b", "input": batch}, timeout=300)
+                if resp.status_code == 200:
+                    all_vectors.extend(resp.json()["embeddings"])
+                    logger.debug(f"Batch {i//batch_size+1}: {len(batch)} texts, OK")
+                    break
+                else:
+                    logger.warning(f"Batch {i//batch_size+1}: HTTP {resp.status_code}, retry {attempt+1}")
+                    time.sleep(5)
+            except Exception as e:
+                logger.warning(f"Batch {i//batch_size+1} attempt {attempt+1}: {type(e).__name__}")
+                time.sleep(5)
+        else:
+            logger.error(f"Batch {i//batch_size+1} failed, using zeros")
+            all_vectors.extend([[0.0]*2560 for _ in batch])
+    return all_vectors
 
 def get_embedding_dim() -> int:
     """Get embedding vector dimension."""

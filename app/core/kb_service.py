@@ -135,23 +135,14 @@ async def update_kb(kb_id: str, data) -> Optional[KnowledgeBase]:
     return kb
 
 async def update_kb_doc_count(kb_id: str):
-    """Refresh kb doc count from Qdrant (real-time, no Redis dependency)."""
+    """Refresh kb doc count from actual files on disk."""
+    from pathlib import Path
+    doc_count = 0
     try:
-        from app.core import vector_store
-        from qdrant_client import QdrantClient, models
-        from app.config import settings as s
-        client = QdrantClient(host=s.qdrant_host, port=s.qdrant_port, check_compatibility=False)
-        col_name = f"kb_{kb_id}"
-        # Count unique doc_ids in the collection
-        result = client.scroll(
-            collection_name=col_name, limit=10000, with_payload=True, with_vectors=False
-        )
-        doc_ids = set()
-        for point in result[0]:
-            did = point.payload.get("doc_id", "")
-            if did and not did.startswith("parent_"):  # exclude parent chunks
-                doc_ids.add(did)
-        doc_count = len(doc_ids)
+        doc_dir = get_doc_dir(kb_id)
+        valid_exts = {".pdf", ".docx", ".md", ".txt"}
+        if doc_dir.exists():
+            doc_count = sum(1 for f in doc_dir.iterdir() if f.is_file() and f.suffix.lower() in valid_exts)
     except Exception:
         doc_count = 0
 
@@ -160,7 +151,6 @@ async def update_kb_doc_count(kb_id: str):
         kb.doc_count = doc_count
         kb.updated_at = datetime.now(UTC)
         await cache.set_json(f"{KB_KEY_PREFIX}{kb_id}", kb.model_dump(mode="json"))
-
 
 async def _create_default_kb():
     kb = KnowledgeBase(id=DEFAULT_KB_ID, name="默认知识库", description="系统默认知识库")
