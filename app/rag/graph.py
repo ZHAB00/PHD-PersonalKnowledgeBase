@@ -1,4 +1,4 @@
-"""RAG chat engine v4: Tool-first architecture ¡ª RAG as a tool, not pre-fetch
+"""RAG chat engine v4: Tool-first architecture â€” RAG as a tool, not pre-fetch
 
 Flow:
   1. User message arrives
@@ -36,6 +36,16 @@ logger = logging.getLogger(__name__)
 
 CHAT_HISTORY_TTL = 86400
 MAX_TOOL_ROUNDS = 5
+
+
+def _background_task(coro, name=""):
+    """Fire-and-forget with proper error handling."""
+    async def _wrapped():
+        try:
+            await coro
+        except Exception as e:
+            logger.debug(f"Background task {name!r} failed (non-critical): {e}")
+    asyncio.create_task(_wrapped())
 
 
 def _get_deepseek_client(timeout: float = 120.0) -> OpenAI:
@@ -150,7 +160,7 @@ async def _agent_loop(
             tool_messages.append(tool_msg_assistant)
             tool_messages.append(tool_msg_result)
 
-    return "±§Ç¸£¬´¦Àí³¬Ê±£¬Çë³¢ÊÔ¼ò»¯ÄúµÄÎÊÌâ¡£", tool_messages
+    return "æŠ±æ­‰ï¼Œå¤„ç†è¶…æ—¶ï¼Œè¯·å°è¯•ç®€åŒ–æ‚¨çš„é—®é¢˜ã€‚", tool_messages
 
 
 # ============================================================
@@ -165,7 +175,7 @@ async def _after_response_tasks(session_id: str, user_id: str, history: list[dic
             if summary:
                 imp = await score_importance(summary)
                 await store_long_term_memory(
-                    user_id=user_id, content=f"[»á»°ÕªÒª] {summary}",
+                    user_id=user_id, content=f"[ä¼šè¯æ‘˜è¦] {summary}",
                     memory_type="summary", importance=imp, session_id=session_id,
                 )
         except Exception as e:
@@ -233,10 +243,10 @@ async def chat(
     Knowledge questions trigger search_knowledge_base tool automatically.
     """
     # Fast path: file listing queries bypass LLM (deterministic, no hallucination risk)
-    file_list_patterns = ["ÓĞÄÄĞ©ÎÄµµ", "ÓĞÄÄĞ©ÎÄ¼ş", "ÎÄ¼şÁĞ±í", "ÎÄµµÁĞ±í", "¼¸¸öÎÄµµ",
-                          "¼¸¸öÎÄ¼ş", "ÁĞ³öÎÄ¼ş", "ÁĞ³öÎÄµµ", "Ê²Ã´ÎÄ¼ş", "Ê²Ã´ÎÄµµ",
-                          "ÄÄĞ©ÎÄµµ", "ÄÄĞ©ÎÄ¼ş", "¹¤×÷ÇøÓĞ", "ÎÄµµÍ³¼Æ", "ÎÄ¼şÍ³¼Æ",
-                          "²éÒ»ÏÂÓĞÄÄĞ©", "¿´¿´ÓĞÄÄĞ©"]
+    file_list_patterns = ["æœ‰å“ªäº›æ–‡æ¡£", "æœ‰å“ªäº›æ–‡ä»¶", "æ–‡ä»¶åˆ—è¡¨", "æ–‡æ¡£åˆ—è¡¨", "å‡ ä¸ªæ–‡æ¡£",
+                          "å‡ ä¸ªæ–‡ä»¶", "åˆ—å‡ºæ–‡ä»¶", "åˆ—å‡ºæ–‡æ¡£", "ä»€ä¹ˆæ–‡ä»¶", "ä»€ä¹ˆæ–‡æ¡£",
+                          "å“ªäº›æ–‡æ¡£", "å“ªäº›æ–‡ä»¶", "å·¥ä½œåŒºæœ‰", "æ–‡æ¡£ç»Ÿè®¡", "æ–‡ä»¶ç»Ÿè®¡",
+                          "æŸ¥ä¸€ä¸‹æœ‰å“ªäº›", "çœ‹çœ‹æœ‰å“ªäº›"]
     q = message.strip().lower()
     if any(p in q for p in file_list_patterns):
         import json as _json
@@ -245,9 +255,9 @@ async def chat(
         fl = result.get("file_list", [])
         if fl:
             fls = "\n".join(str(i+1) + ". " + f for i, f in enumerate(fl))
-            ans = "µ±Ç°ÖªÊ¶¿â¹²ÓĞ " + str(result.get("doc_count", len(fl))) + " ¸öÎÄ¼ş£º\n\n" + fls
+            ans = "å½“å‰çŸ¥è¯†åº“å…±æœ‰ " + str(result.get("doc_count", len(fl))) + " ä¸ªæ–‡ä»¶ï¼š\n\n" + fls
         else:
-            ans = "µ±Ç°ÖªÊ¶¿âÔİÎŞÎÄµµ¡£"
+            ans = "å½“å‰çŸ¥è¯†åº“æš‚æ— æ–‡æ¡£ã€‚"
         history = await _get_history(session_id)
         history.append({"role": "user", "content": message})
         history.append({"role": "assistant", "content": ans})
@@ -279,7 +289,7 @@ async def chat(
     history_budgeted = apply_token_budget(llm_history)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     # Inject current KB context so LLM knows which KB to query
-    messages.append({"role": "system", "content": f"µ±Ç°ÖªÊ¶¿âID: {kb_id}¡£µ÷ÓÃ doc_stats »ò search_knowledge_base Ê±±ØĞëÊ¹ÓÃ´Ë kb_id¡£"})
+    messages.append({"role": "system", "content": f"å½“å‰çŸ¥è¯†åº“ID: {kb_id}ã€‚è°ƒç”¨ doc_stats æˆ– search_knowledge_base æ—¶å¿…é¡»ä½¿ç”¨æ­¤ kb_idã€‚"})
     if memory_ctx:
         messages.append({"role": "system", "content": memory_ctx})
     # GraphRAG: inject knowledge graph evidence if enabled
@@ -314,9 +324,9 @@ async def chat(
     history.append(msg)
     await _set_history(session_id, history)
 
-    # Background tasks
-    asyncio.create_task(cache.delete(mem_cache_key))
-    asyncio.create_task(_after_response_tasks(session_id, user_id, history))
+    # Background tasks (fire-and-forget with error handling)
+    _background_task(cache.delete(mem_cache_key), "cache.delete(mem_cache_key)")
+    _background_task(_after_response_tasks(session_id, user_id, history), "after_response_tasks")
 
     return ChatResponse(
         session_id=session_id,
@@ -381,7 +391,7 @@ async def chat_stream(
     history_budgeted = apply_token_budget(llm_history)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     # Inject current KB context so LLM knows which KB to query
-    messages.append({"role": "system", "content": f"µ±Ç°ÖªÊ¶¿âID: {kb_id}¡£µ÷ÓÃ doc_stats »ò search_knowledge_base Ê±±ØĞëÊ¹ÓÃ´Ë kb_id¡£"})
+    messages.append({"role": "system", "content": f"å½“å‰çŸ¥è¯†åº“ID: {kb_id}ã€‚è°ƒç”¨ doc_stats æˆ– search_knowledge_base æ—¶å¿…é¡»ä½¿ç”¨æ­¤ kb_idã€‚"})
     if memory_ctx:
         messages.append({"role": "system", "content": memory_ctx})
     # GraphRAG: inject knowledge graph evidence if enabled
@@ -453,14 +463,14 @@ async def chat_stream(
         history.append(msg)
         await _set_history(session_id, history)
 
-        # Background
-        asyncio.create_task(cache.delete(mem_cache_key))
-        asyncio.create_task(_after_response_tasks(session_id, user_id, history))
+        # Background (fire-and-forget with error handling)
+        _background_task(cache.delete(mem_cache_key), "cache.delete(mem_cache_key)")
+        _background_task(_after_response_tasks(session_id, user_id, history), "after_response_tasks")
     except Exception as e:
         logger.error(f"Stream error: {e}")
         # Yield any sources we have before sending the error
         yield _yield_sources(stream_tool_calls)
-        yield f"AI ·şÎñÔİÊ±²»¿ÉÓÃ: {str(e)}"
+        yield f"AI æœåŠ¡æš‚æ—¶ä¸å¯ç”¨: {str(e)}"
 
 
 async def get_chat_history(session_id: str) -> list[dict]:

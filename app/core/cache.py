@@ -15,6 +15,7 @@ except ImportError:
     _REDIS_AVAILABLE = False
 
 _pool = None
+_client = None
 _enabled = False
 _fallback_store: dict[str, str] = {}
 
@@ -30,8 +31,9 @@ async def _init():
             decode_responses=True,
             protocol=2,
         )
-        r = redis.Redis(connection_pool=_pool)
-        await r.ping()
+        global _client
+        _client = redis.Redis(connection_pool=_pool)
+        await _client.ping()
         _enabled = True
         logger.info("Redis 连接就绪")
     except Exception as e:
@@ -48,33 +50,29 @@ async def get_redis():
 
 async def set(key: str, value: str, ex: int | None = None):
     """Set a raw string value."""
-    if _enabled and _pool:
-        r = redis.Redis(connection_pool=_pool)
-        await r.set(key, value, ex=ex)
+    if _enabled and _client:
+        await _client.set(key, value, ex=ex)
     else:
         _fallback_store[key] = value
 
 
 async def get(key: str) -> Optional[str]:
     """Get a raw string value."""
-    if _enabled and _pool:
-        r = redis.Redis(connection_pool=_pool)
-        return await r.get(key)
+    if _enabled and _client:
+        return await _client.get(key)
     return _fallback_store.get(key)
 
 
 async def set_json(key: str, value, ex: int | None = None):
-    if _enabled and _pool:
-        r = redis.Redis(connection_pool=_pool)
-        await r.set(key, json.dumps(value, ensure_ascii=False, default=str), ex=ex)
+    if _enabled and _client:
+        await _client.set(key, json.dumps(value, ensure_ascii=False, default=str), ex=ex)
     else:
         _fallback_store[key] = json.dumps(value, ensure_ascii=False, default=str)
 
 
 async def get_json(key: str) -> Optional[dict | list]:
-    if _enabled and _pool:
-        r = redis.Redis(connection_pool=_pool)
-        raw = await r.get(key)
+    if _enabled and _client:
+        raw = await _client.get(key)
         if raw:
             return json.loads(raw)
     else:
@@ -85,22 +83,23 @@ async def get_json(key: str) -> Optional[dict | list]:
 
 
 async def delete(key: str):
-    if _enabled and _pool:
-        r = redis.Redis(connection_pool=_pool)
-        await r.delete(key)
+    if _enabled and _client:
+        await _client.delete(key)
     else:
         _fallback_store.pop(key, None)
 
 
 async def keys(pattern: str) -> list[str]:
-    if _enabled and _pool:
-        r = redis.Redis(connection_pool=_pool)
-        return await r.keys(pattern)
+    if _enabled and _client:
+        return await _client.keys(pattern)
     return [k for k in _fallback_store if k.startswith(pattern.split(":")[0])]
 
 
 async def close():
-    global _pool
+    global _pool, _client
+    if _client:
+        await _client.aclose()
+        _client = None
     if _pool:
         await _pool.disconnect()
         _pool = None
