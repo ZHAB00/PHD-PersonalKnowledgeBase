@@ -276,6 +276,8 @@
         rmd(answerDiv.querySelector("p"), full);
       }
       uts(state.sessionId);
+      setTimeout(function() { lss(); }, 500);
+
     } catch(e) {
       if (!answerDiv) { answerDiv = mkAnswer(); }
       rmd(answerDiv.querySelector("p"), "**Error:** " + e.message);
