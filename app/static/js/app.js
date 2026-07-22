@@ -43,7 +43,7 @@
     list.sort(function(a,b) { return (b.updated||0) - (a.updated||0); });
     c.innerHTML = list.map(function(s) {
       var act = s.id === state.sessionId ? " active" : "";
-      var lb = stripMd(s.label || s.title || s.id.replace("sess_","").substring(0,8));
+      var lb = stripMd(s.label || s.title || "新建对话");
       return '<div class="session-item' + act + '" data-sid="' + s.id + '">' +
         '<span class="session-item-title">' + esc(lb) + '</span>' +
         '<button class="session-item-del" data-sid="' + s.id + '">&times;</button></div>';
