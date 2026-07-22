@@ -1,6 +1,8 @@
 from __future__ import annotations
+import asyncio
 import shutil
 from pathlib import Path
+from app.core import cache
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query, Request
 from app.models.document import DocumentUploadResponse, DocumentTaskStatus, DocumentStatus, DocumentInfo, DocumentType
 from app.workers.ingestion import ingest_document
@@ -74,11 +76,31 @@ async def list_documents(kb_id: str = Query("default"), tenant_id: str = Query("
                     id=f"orphan_{f.name}",
                     filename=f.name,
                     doc_type=DocumentType(_get_ext_from_name(f.name)),
-                    status=DocumentStatus.PENDING,
+                    status=DocumentStatus.READY if qdrant_chunks > 0 else DocumentStatus.PENDING,
                     total_chunks=qdrant_chunks,
                     total_pages=0,
                     kb_id=kb_id,
                 ))
+                # Auto-repair: if Qdrant has chunks, recreate the Redis READY record
+                if qdrant_chunks > 0:
+                    from app.workers.ingestion import _task_key, READY_TTL
+                    from datetime import datetime, timezone as tz
+                    repair_info = {
+                        "id": f"auto_repaired_{f.name}",
+                        "task_id": f"auto_repaired_{f.name}",
+                        "filename": f.name,
+                        "doc_type": _get_ext_from_name(f.name),
+                        "status": "ready",
+                        "total_chunks": qdrant_chunks,
+                        "total_pages": 0,
+                        "kb_id": kb_id,
+                        "tenant_id": tenant_id,
+                        "created_at": datetime.now(tz.utc).isoformat(),
+                        "updated_at": datetime.now(tz.utc).isoformat(),
+                    }
+                    asyncio.create_task(
+                        cache.set_json(_task_key(kb_id, f.name), repair_info, ex=READY_TTL)
+                    )
 
     # Also update tasks that have 0 chunks with Qdrant counts
     enriched_tasks = []

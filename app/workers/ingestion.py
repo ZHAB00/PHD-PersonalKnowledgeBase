@@ -16,7 +16,8 @@ from app.models.document import DocumentInfo, DocumentStatus, DocumentType, Docu
 
 logger = logging.getLogger(__name__)
 
-TASK_TTL = 86400
+TASK_TTL = 86400  # 1 day for transient tasks
+READY_TTL = 2592000  # 30 days for completed docs
 MAX_CONCURRENT = 2       # max concurrent embedding tasks (Ollama limit)
 RETRY_COUNT = 1          # retry on embedding failure
 RETRY_DELAY = 2.0        # seconds between retries
@@ -68,7 +69,8 @@ async def _process_task(task_id: str, filepath: str | Path, filename: str, kb_id
             doc_info.status = DocumentStatus.READY
             await cache.delete(f"kb:{kb_id}:chunk_counts")  # invalidate cache
             doc_info.updated_at = datetime.now(UTC)
-            await cache.set_json(_task_key(kb_id, task_id), doc_info.model_dump(mode="json"), ex=TASK_TTL)
+            # READY docs persist 30 days so a weekend restart doesnt lose status
+            await cache.set_json(_task_key(kb_id, task_id), doc_info.model_dump(mode="json"), ex=READY_TTL)
             logger.info(f"Doc {filename}: {count} chunks -> kb:{kb_id}")
 
             # Update KB doc count
