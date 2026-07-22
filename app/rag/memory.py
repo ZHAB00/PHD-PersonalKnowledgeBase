@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # Budget config
 TOKEN_BUDGET_CHARS = 6000
 SYSTEM_BUDGET_CHARS = 800
-SUMMARY_TRIGGER = 8          # summarize every 8 turns
+SUMMARY_TRIGGER = 1          # summarize every turn
 MEMORY_TTL = 86400 * 7       # 7 days
 
 # Memory collection in Qdrant
