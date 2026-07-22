@@ -300,12 +300,19 @@
       cm._paginateOffset = (data.history || []).length;
       cm.innerHTML = "";
       (data.history || []).forEach(function(m) {
+        // Show tool calls as thinking bubble (same style as streaming)
         if (m.role === "assistant" && m.tool_calls && m.tool_calls.length) {
-          m.tool_calls.forEach(function(tc) { atb(tc.tool_name); });
+          var thinkDiv = document.createElement("div");
+          thinkDiv.className = "message assistant thinking";
+          var toolNames = m.tool_calls.map(function(tc) { return tc.tool_name; }).join(", ");
+          thinkDiv.innerHTML = '<div class="message-avatar">&#128269;</div><div class="message-content"><div class="thinking-label">调用工具: ' + esc(toolNames) + '</div></div>';
+          var cm2 = document.getElementById("chatMessages");
+          if (cm2) cm2.appendChild(thinkDiv);
         }
+        // Answer bubble
         var el = makeMsg(m.role === "user" ? "user" : "assistant", "");
-        var cm2 = document.getElementById("chatMessages");
-        if (cm2) cm2.appendChild(el);
+        var cm3 = document.getElementById("chatMessages");
+        if (cm3) cm3.appendChild(el);
         rmd(el.querySelector("p"), m.content || "");
       });
       if (cm._paginateHasMore) {
