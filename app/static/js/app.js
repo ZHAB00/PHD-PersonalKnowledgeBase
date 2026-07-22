@@ -130,6 +130,15 @@
       try { renderMathInElement(el, { delimiters: [{left: "$\$", right: "$\$", display: true}, {left: "$", right: "$", display: false}] }); } catch(e) {}
     } catch(e) { el.textContent = text; }
   }
+  function makeMsg(role, txt) {
+    var d = document.createElement("div");
+    d.className = "message " + role;
+    d.innerHTML = '<div class="message-avatar">' + (role === "assistant" ? "AI" : "Me") +
+      '</div><div class="message-content"><p></p></div>';
+    if (txt) d.querySelector("p").textContent = txt;
+    return d;
+  }
+
   function ams(role, txt) {
     var d = document.createElement("div");
     d.className = "message " + role;
@@ -276,21 +285,89 @@
   }
 
   async function lch() {
-    var cm = $("chatMessages"); if (!cm) return;
+    var cm = document.getElementById("chatMessages"); if (!cm) return;
+    cm._paginateOffset = 0;
+    cm._paginateHasMore = true;
+    cm._loadingMore = false;
     try {
-      var resp = await fetch("/api/chat/history/" + state.sessionId);
-      if (!resp.ok) { cm.innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><p>开始一段新的对话吧</p><p class="chat-empty-hint">在下方输入你的问题，AI 会基于知识库为你解答</p></div>'; return; }
+      var resp = await fetch("/api/chat/history/" + state.sessionId + "?offset=0&limit=20");
+      if (!resp.ok) {
+        cm.innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><p>开始一段新的对话吧</p><p class="chat-empty-hint">在下方输入你的问题，AI 会基于知识库为你解答</p></div>';
+        return;
+      }
       var data = await resp.json();
+      cm._paginateHasMore = data.has_more;
+      cm._paginateOffset = (data.history || []).length;
       cm.innerHTML = "";
       (data.history || []).forEach(function(m) {
         if (m.role === "assistant" && m.tool_calls && m.tool_calls.length) {
           m.tool_calls.forEach(function(tc) { atb(tc.tool_name); });
         }
-        var el = ams(m.role === "user" ? "user" : "assistant", ""); 
+        var el = makeMsg(m.role === "user" ? "user" : "assistant", "");
+        var cm2 = document.getElementById("chatMessages");
+        if (cm2) cm2.appendChild(el);
         rmd(el.querySelector("p"), m.content || "");
       });
+      if (cm._paginateHasMore) {
+        var moreDiv = document.createElement("div");
+        moreDiv.className = "load-more-indicator";
+        moreDiv.textContent = "↑ 向上滑动加载更多...";
+        cm.insertBefore(moreDiv, cm.firstChild);
+      }
+      cm.onscroll = function() {
+        if (cm.scrollTop < 80 && cm._paginateHasMore && !cm._loadingMore) {
+          cm.onscroll = null;
+          lchMore();
+        }
+      };
       stb();
     } catch(e) { cm.innerHTML = ""; }
+  }
+
+  async function lchMore() {
+    var cm = document.getElementById("chatMessages");
+    if (!cm || !cm._paginateHasMore || cm._loadingMore) return;
+    cm._loadingMore = true;
+    try {
+      var offset = cm._paginateOffset;
+      var resp = await fetch("/api/chat/history/" + state.sessionId + "?offset=" + offset + "&limit=20");
+      if (!resp.ok) { cm._loadingMore = false; return; }
+      var data = await resp.json();
+      cm._paginateHasMore = data.has_more;
+      cm._paginateOffset += (data.history || []).length;
+      var oldHeight = cm.scrollHeight;
+      var indicator = cm.querySelector(".load-more-indicator");
+      if (indicator) indicator.remove();
+      var msgs = data.history || [];
+      for (var i = msgs.length - 1; i >= 0; i--) {
+        var m = msgs[i];
+        if (m.role === "assistant" && m.tool_calls && m.tool_calls.length) {
+          for (var j = 0; j < m.tool_calls.length; j++) {
+            var td = document.createElement("div");
+            td.className = "message-tool";
+            td.innerHTML = '<span class="tool-icon">&#9881;</span><span class="tool-label">[Tool] ' + esc(m.tool_calls[j].tool_name) + '</span>';
+            cm.insertBefore(td, cm.firstChild);
+          }
+        }
+        var el = makeMsg(m.role === "user" ? "user" : "assistant", "");
+        rmd(el.querySelector("p"), m.content || "");
+        cm.insertBefore(el, cm.firstChild);
+      }
+      cm.scrollTop = cm.scrollHeight - oldHeight;
+      if (cm._paginateHasMore) {
+        var moreDiv = document.createElement("div");
+        moreDiv.className = "load-more-indicator";
+        moreDiv.textContent = "↑ 向上滑动加载更多...";
+        cm.insertBefore(moreDiv, cm.firstChild);
+      }
+      cm.onscroll = function() {
+        if (cm.scrollTop < 80 && cm._paginateHasMore && !cm._loadingMore) {
+          cm.onscroll = null;
+          lchMore();
+        }
+      };
+    } catch(e) {}
+    cm._loadingMore = false;
   }
 
   async function lkl() {

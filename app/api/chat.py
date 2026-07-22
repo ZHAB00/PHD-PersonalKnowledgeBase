@@ -2,7 +2,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Form, Request
 from fastapi.responses import StreamingResponse
 from app.models.chat import ChatRequest, ChatResponse
-from app.rag.graph import chat, chat_stream, get_chat_history, clear_chat_history
+from app.rag.graph import chat, chat_stream, get_chat_history, get_chat_history_paginated, clear_chat_history
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -106,9 +106,12 @@ async def generate_title(data: dict):
         return {"title": fallback or "???"}
 
 @router.get("/history/{session_id}")
-async def get_history(session_id: str):
+async def get_history(session_id: str, offset: int = 0, limit: int = 20):
+    if offset > 0:
+        messages, has_more = await get_chat_history_paginated(session_id, offset, limit)
+        return {"session_id": session_id, "history": messages, "has_more": has_more, "offset": offset}
     history = await get_chat_history(session_id)
-    return {"session_id": session_id, "history": history}
+    return {"session_id": session_id, "history": history, "has_more": len(history) > 20}
 
 
 @router.post("/clear/{session_id}")

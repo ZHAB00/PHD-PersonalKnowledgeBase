@@ -43,6 +43,21 @@ def list_sessions(user_id: str = "default") -> list:
     rows = conn.execute("SELECT id, title, created_at FROM sessions WHERE user_id = ? ORDER BY created_at DESC", (user_id,)).fetchall()
     return [{"id": r[0], "title": r[1], "created_at": r[2]} for r in rows]
 
+def load_history_paginated(session_id: str, offset: int, limit: int) -> list:
+    """Load history with offset/limit for infinite scroll. Returns (messages, has_more)."""
+    conn = _get_conn()
+    row = conn.execute("SELECT data FROM history WHERE session_id = ?", (session_id,)).fetchone()
+    if not row:
+        return [], False
+    full = json.loads(row[0])
+    total = len(full)
+    start = max(0, total - offset - limit)
+    end = total - offset
+    chunk = full[start:end]
+    has_more = start > 0
+    return chunk, has_more
+
+
 def delete_session(session_id: str):
     conn = _get_conn()
     conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))

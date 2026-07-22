@@ -29,7 +29,7 @@ from app.rag.memory import (
 from app.rag.tools import get_tools, execute_tool
 from app.models.chat import ChatResponse, SourceReference, ToolCallEvent
 from app.core import cache
-from app.core.chat_store import save_history, load_history, delete_history as delete_chat_history
+from app.core.chat_store import save_history, load_history, load_history_paginated, delete_history as delete_chat_history
 from app.prompts import SYSTEM_PROMPT, REFUSAL_RESPONSE
 
 logger = logging.getLogger(__name__)
@@ -475,6 +475,13 @@ async def chat_stream(
 
 async def get_chat_history(session_id: str) -> list[dict]:
     return await _get_history(session_id)
+
+
+async def get_chat_history_paginated(session_id: str, offset: int = 0, limit: int = 20):
+    """Returns (messages, has_more) for infinite scroll."""
+    import asyncio
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: load_history_paginated(session_id, offset, limit))
 
 
 async def clear_chat_history(session_id: str):

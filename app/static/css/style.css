@@ -674,6 +674,15 @@ body {
 }
 
 
+
+.load-more-indicator {
+  text-align: center;
+  padding: 12px;
+  color: #94a3b8;
+  font-size: 13px;
+  cursor: default;
+  user-select: none;
+}
 /* ===== DeepSeek-style sidebar ===== */
 .btn-new-chat {
   display: flex;
