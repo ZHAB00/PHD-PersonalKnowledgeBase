@@ -1,4 +1,4 @@
-﻿"""GraphRAG: Knowledge Graph construction + graph-enhanced retrieval
+"""GraphRAG: Knowledge Graph construction + graph-enhanced retrieval
 
 Builds entity-relationship graph from document chunks via LLM extraction,
 stores in Neo4j, and enriches retrieval with graph-evidence subgraphs.
@@ -113,25 +113,14 @@ EXTRACTION_PROMPT = """你是一个知识图谱构建专家。从以下文档片
 
 
 async def extract_entities_relations(chunk_text: str, kb_id: str) -> tuple[list[dict], list[dict]]:
-    """Extract entities and relations from a single chunk via LLM."""
-    from openai import OpenAI
-    import httpx
+    """Extract entities and relations from a single chunk via LLM (non-blocking)."""
+    import asyncio
 
     prompt = EXTRACTION_PROMPT.replace("{chunk_text}", chunk_text[:3000])
 
-    client = OpenAI(
-        base_url=settings.deepseek_base_url,
-        api_key=settings.deepseek_api_key,
-        timeout=httpx.Timeout(60.0, connect=10.0),
-    )
+    loop = asyncio.get_running_loop()
     try:
-        resp = client.chat.completions.create(
-            model=settings.graphrag_llm_model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=1024,
-        )
-        raw = resp.choices[0].message.content.strip()
+        raw = await loop.run_in_executor(None, _call_extraction_llm, prompt)
     except Exception as e:
         logger.warning("GraphRAG extraction LLM error: %s", e)
         return [], []
@@ -150,6 +139,25 @@ async def extract_entities_relations(chunk_text: str, kb_id: str) -> tuple[list[
     relations = data.get("relations", [])
     logger.debug("GraphRAG extracted: %d entities, %d relations from chunk", len(entities), len(relations))
     return entities, relations
+
+
+def _call_extraction_llm(prompt: str) -> str:
+    """Synchronous LLM call for entity extraction (runs in thread pool executor)."""
+    from openai import OpenAI
+    import httpx
+
+    client = OpenAI(
+        base_url=settings.deepseek_base_url,
+        api_key=settings.deepseek_api_key,
+        timeout=httpx.Timeout(60.0, connect=10.0),
+    )
+    resp = client.chat.completions.create(
+        model=settings.graphrag_llm_model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        max_tokens=1024,
+    )
+    return resp.choices[0].message.content.strip()
 
 
 # ================================================================
