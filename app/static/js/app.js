@@ -86,7 +86,7 @@
   }
 
   function sws(sid) {
-    if (state.streaming) return;
+    if (state.abortController) { state.abortController.abort(); }
     state.sessionId = sid; localStorage.setItem("kb_session_id", sid);
     rsl(); lch(); scv();
   }
@@ -141,7 +141,6 @@
 
 
   function toggleGraphRag() {
-    if (state.streaming) return;
     state.graphRagEnabled = !state.graphRagEnabled;
     var btn = document.getElementById("graphRagToggle");
     if (btn) {
@@ -243,7 +242,8 @@
       p.append("rerank_strategy", "none");
       p.append("enable_graphrag", state.graphRagEnabled !== false ? "true" : "false");
 
-      var resp = await fetch("/api/chat/stream", { method: "POST", body: p });
+      state.abortController = new AbortController();
+      var resp = await fetch("/api/chat/stream", { method: "POST", body: p, signal: state.abortController.signal });
       if (!resp.ok) throw new Error("HTTP " + resp.status);
 
       var reader = resp.body.getReader();
@@ -309,9 +309,10 @@
       setTimeout(function() { lss(); }, 500);
 
     } catch(e) {
-      if (!answerDiv) { answerDiv = mkAnswer(); }
-      rmd(answerDiv.querySelector("p"), "**Error:** " + e.message);
+      if (state.abortController && state.abortController.signal.aborted) { /* user navigated away */ }
+      else { if (!answerDiv) { answerDiv = mkAnswer(); } rmd(answerDiv.querySelector("p"), "**Error:** " + e.message); }
     } finally {
+      state.abortController = null;
       state.streaming = false; if (sb) sb.disabled = false;
     }
   }
