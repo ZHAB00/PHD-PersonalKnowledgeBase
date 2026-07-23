@@ -1,4 +1,4 @@
-﻿import os, json, sqlite3, threading
+import os, json, sqlite3, threading
 from pathlib import Path
 
 DB_PATH = Path(os.environ.get("KB_DATA_DIR", "./data")) / "chat_history.db"
@@ -37,6 +37,12 @@ def save_session(session_id: str, title: str, user_id: str = "default"):
     conn.execute("INSERT OR REPLACE INTO sessions (id, title, created_at, user_id) VALUES (?,?,?,?)",
                  (session_id, title, __import__("time").time(), user_id))
     conn.commit()
+
+def get_session_title(session_id: str) -> str:
+    """Return current session title or empty string (no title set)."""
+    conn = _get_conn()
+    row = conn.execute("SELECT title FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    return row[0] if row else ""
 
 def list_sessions(user_id: str = "default") -> list:
     conn = _get_conn()

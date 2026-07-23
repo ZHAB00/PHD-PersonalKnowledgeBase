@@ -178,16 +178,22 @@ async def _after_response_tasks(session_id: str, user_id: str, history: list[dic
                     user_id=user_id, content=f"[会话摘要] {summary}",
                     memory_type="summary", importance=imp, session_id=session_id,
                 )
-                # Update session title from the new summary (no extra API call)
+                # Update session title from summary ONLY if still default
                 try:
                     import re
-                    title = re.sub(r'[#*_`~>|]', '', summary[:40]).replace('"', '').replace("'", '').strip()
-                    if len(title) > 20:
-                        title = title[:20]
-                    if title:
-                        from app.core.chat_store import save_session
-                        save_session(session_id, title, "default")
-                        logger.debug(f"Session {session_id[:12]} title updated: {title}")
+                    from app.core.chat_store import get_session_title, save_session
+                    cur = get_session_title(session_id)
+                    is_default = (
+                        not cur or cur == "???" or cur == "新建对话"
+                        or cur.startswith("sess_")
+                    )
+                    if is_default:
+                        title = re.sub(r'[#*_`~>|]', '', summary[:40]).replace('"', '').replace("'", '').strip()
+                        if len(title) > 20:
+                            title = title[:20]
+                        if title:
+                            save_session(session_id, title, "default")
+                            logger.debug(f"Session {session_id[:12]} title updated: {title}")
                 except Exception:
                     pass
         except Exception as e:

@@ -1,4 +1,4 @@
-﻿(function() {
+(function() {
   "use strict";
 
   var state = {
@@ -37,6 +37,29 @@
     ssl(l); rsl();
   }
 
+
+  function edt(sid) {
+    var el = document.querySelector('.session-item-title[data-sid="' + sid + '"]');
+    if (!el || el.querySelector("input")) return;
+    var orig = el.textContent;
+    el.innerHTML = '<input class="session-item-input" value="' + orig.replace(/"/g, '&quot;') + '" style="width:' + (el.offsetWidth + 20) + 'px">';
+    var inp = el.querySelector("input");
+    inp.focus(); inp.select();
+    function commit(save) {
+      var newTitle = inp.value.trim();
+      if (!save || !newTitle || newTitle === orig) { el.textContent = orig; return; }
+      el.textContent = newTitle;
+      var l = gsl(); var f = l.find(function(s) { return s.id === sid; });
+      if (f) { f.label = newTitle; f.updated = Date.now(); ssl(l); }
+      fetch("/api/chat/sessions/save", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({id: sid, title: newTitle, user_id: "default"})
+      }).catch(function(){});
+    }
+    inp.addEventListener("keydown", function(ev) { if (ev.key === "Enter") { commit(true); } else if (ev.key === "Escape") { commit(false); } });
+    inp.addEventListener("blur", function() { commit(true); });
+  }
+
   function rsl() {
     var c = $("sessionItems"); if (!c) return;
     var list = gsl();
@@ -45,7 +68,7 @@
       var act = s.id === state.sessionId ? " active" : "";
       var lb = stripMd(s.label || s.title || "新建对话");
       return '<div class="session-item' + act + '" data-sid="' + s.id + '">' +
-        '<span class="session-item-title">' + esc(lb) + '</span>' +
+        '<span class="session-item-title" data-sid="' + s.id + '">' + esc(lb) + '</span>' +
         '<button class="session-item-del" data-sid="' + s.id + '">&times;</button></div>';
     }).join("");
     c.querySelectorAll(".session-item").forEach(function(el) {
@@ -56,6 +79,9 @@
     });
     c.querySelectorAll(".session-item-del").forEach(function(b) {
       b.addEventListener("click", function(ev) { ev.stopPropagation(); dls(b.dataset.sid); });
+    });
+    c.querySelectorAll(".session-item-title").forEach(function(sp) {
+      sp.addEventListener("dblclick", function(ev) { ev.stopPropagation(); edt(sp.closest(".session-item").dataset.sid); });
     });
   }
 
