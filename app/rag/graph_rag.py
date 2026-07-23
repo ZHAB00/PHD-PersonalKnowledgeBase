@@ -231,17 +231,27 @@ def retrieve_graph_evidence(query: str, kb_id: str, max_evidence: int = 8) -> li
     evidence = []
 
     with driver.session(database=settings.neo4j_database) as session:
-        # Step 1: find matching entities by name fuzzy match via CONTAINS
+        # Step 1: jieba keyword extraction + bidirectional CONTAINS match
+        import jieba
+        keywords = list(set(jieba.cut(query)))
+        keywords = [k.strip() for k in keywords if len(k.strip()) >= 2][:15]
+        # Primary: entity name appears in query
+        # Secondary: keyword from jieba appears in entity name
+        conditions = ["$query CONTAINS e.name"]
+        params = {"kb_id": kb_id, "query": query, "max_ev": max_evidence}
+        for i, kw in enumerate(keywords):
+            pname = f"kw{i}"
+            conditions.append(f"e.name CONTAINS ${pname}")
+            params[pname] = kw
+        where_clause = " OR ".join(conditions)
         result = session.run(
-            """
-            MATCH (e:Entity {kb_id: $kb_id})
-            WHERE e.name CONTAINS $q1 OR e.name CONTAINS $q2 OR e.name CONTAINS $q3
+            f"""
+            MATCH (e:Entity {{kb_id: $kb_id}})
+            WHERE {where_clause}
             RETURN e.name AS entity, e.type AS type, e.description AS desc
             LIMIT $max_ev
             """,
-            kb_id=kb_id,
-            q1=query[:20], q2=query[:10], q3=query[:5],
-            max_ev=max_evidence,
+            **params,
         )
         matched_entities = [r.data() for r in result]
 
