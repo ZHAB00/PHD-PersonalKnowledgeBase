@@ -1,4 +1,4 @@
-﻿"""Graph visualization API: returns entity-relation data for vis-network"""
+"""Graph visualization API: returns entity-relation data for vis-network"""
 from __future__ import annotations
 import logging
 from fastapi import APIRouter, Query
@@ -93,6 +93,31 @@ async def get_graph_data(
                     "title": record.get("desc", ""),
                     "arrows": "to",
                 })
+
+
+        # Step 3: co-occurrence edges (entities mentioned in same chunk)
+        result = session.run(
+            """
+            MATCH (a:Entity {kb_id: $kb_id})-[:MENTIONED_IN]->(c:Chunk {kb_id: $kb_id})<-[:MENTIONED_IN]-(b:Entity {kb_id: $kb_id})
+            WHERE a.id < b.id
+            RETURN a.id AS source, b.id AS target, count(c) AS shared_chunks
+            LIMIT $limit
+            """,
+            kb_id=kb_id, limit=limit * 2,
+        )
+        for record in result:
+            edge_key = f"{record['source']}~~{record['target']}"
+            if edge_key not in edge_ids:
+                edge_ids.add(edge_key)
+                edges.append({
+                    "from": record["source"],
+                    "to": record["target"],
+                    "label": "共现",
+                    "title": f"同时出现在 {record['shared_chunks']} 个片段中",
+                    "arrows": "",
+                    "dashes": True,
+                })
+
 
     return {"nodes": nodes, "edges": edges, "kb_id": kb_id, "total_entities": len(nodes), "total_relations": len(edges)}
 
