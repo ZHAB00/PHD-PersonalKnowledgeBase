@@ -97,9 +97,9 @@ async def _ingest_graph_async(chunks, kb_id: str, doc_id: str, filename: str):
         if not settings.neo4j_enabled:
             return
         # Only process first N chunks to avoid excessive LLM calls
-        max_graph_chunks = 50
-        sample = chunks[:max_graph_chunks]
-        logger.info(f"GraphRAG: extracting from {len(sample)}/{len(chunks)} chunks of {filename}")
+        max_graph_chunks = 0  # 0 = process all chunks
+        sample = chunks if max_graph_chunks <= 0 else chunks[:max_graph_chunks]
+        logger.info(f"GraphRAG: extracting from {len(sample)}/{len(chunks)} chunks of {filename} (~{len(sample)*2}s)")
         for c in sample:
             chunk_id = f"{doc_id}:{c.metadata.chunk_index}"
             await ingest_chunk_to_graph(
