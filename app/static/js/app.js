@@ -145,7 +145,9 @@
     d.innerHTML = '<div class="message-avatar">' + (role === "assistant" ? "AI" : "Me") +
       '</div><div class="message-content"><p></p></div>';
     if (txt) d.querySelector("p").textContent = txt;
-    $("chatMessages").appendChild(d);
+    var ce = document.getElementById("chatMessages").querySelector(".chat-empty");
+    if (ce) document.getElementById("chatMessages").innerHTML = "";
+    document.getElementById("chatMessages").appendChild(d);
     stb();
     return d;
   }
@@ -336,6 +338,8 @@
   async function lchMore() {
     var cm = document.getElementById("chatMessages");
     if (!cm || !cm._paginateHasMore || cm._loadingMore) return;
+    var ce = cm.querySelector(".chat-empty");
+    if (ce) cm.innerHTML = "";
     cm._loadingMore = true;
     try {
       var offset = cm._paginateOffset;
