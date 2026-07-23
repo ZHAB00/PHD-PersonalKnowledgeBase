@@ -86,6 +86,7 @@
   }
 
   function sws(sid) {
+    if (state.streaming) return;
     state.sessionId = sid; localStorage.setItem("kb_session_id", sid);
     rsl(); lch(); scv();
   }
@@ -140,6 +141,7 @@
 
 
   function toggleGraphRag() {
+    if (state.streaming) return;
     state.graphRagEnabled = !state.graphRagEnabled;
     var btn = document.getElementById("graphRagToggle");
     if (btn) {
