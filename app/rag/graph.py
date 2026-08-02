@@ -370,8 +370,8 @@ def _yield_sources(stream_tool_calls: list) -> str:
                         "content": r.get("content", "")[:200],
                         "score": r.get("score", 0.0),
                     })
-            except Exception:
-                pass
+            except Exception as ex:
+                    logger.warning(f"Failed to extract sources from {tc.tool_name}: {ex}")
     logger.info(f"Yield sources: {len(sources_data)} items from {len(stream_tool_calls)} tool calls")
     return "__SOURCES__:" + _json.dumps(sources_data, ensure_ascii=False)
 
@@ -447,8 +447,8 @@ async def chat_stream(
                         result="",
                         status="ok",
                     ))
-                except Exception:
-                    pass
+                except Exception as ex:
+                    logger.warning(f"Failed to parse tool call: {ex}")
                 yield chunk
             elif chunk.startswith("__TOOL_RESULT__:"):
                 # Update last tool call with result
@@ -456,8 +456,8 @@ async def chat_stream(
                     try:
                         tr_data = json.loads(chunk[len("__TOOL_RESULT__:"):])
                         stream_tool_calls[-1].result = tr_data.get("result", "")[:8000]
-                    except Exception:
-                        pass
+                    except Exception as ex:
+                        logger.warning(f"Failed to parse tool result: {ex}")
                 yield chunk
                 # Yield sources incrementally so frontend sees them even if later calls fail
                 yield _yield_sources(stream_tool_calls)

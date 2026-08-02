@@ -266,3 +266,33 @@ app/static/js/app.js — switchView() 函数
 
 *报告时间: 2026-07-12*
 *关联文件: app/static/js/app.js, app/api/chat.py, app/rag/graph.py*
+
+---
+
+## Bug 7: 知识图谱持续出现游离点
+
+### 影响
+图谱中大量实体节点没有任何可见连线，重建后依然存在，图观感破碎。
+
+### 根因
+1. 每个实体都会被入库，但可见边只有 `RELATES_TO` 和同 chunk 共现边；没有这两种边的实体必然显示为孤点。
+2. LLM 抽取关系少且 `relations` 的 source/target 与 `entities` 名称不完全一致时，旧逻辑 `MATCH` 不到端点就直接丢弃关系，实体却仍保留。
+3. `/api/graph/data` 先取实体、再分别截断取边（`LIMIT limit*2`），节点集和边集不是封闭子图，可能漏掉已存在的边。
+4. 前端不过滤 degree 0 节点，所有入库实体全部画出来。
+
+### 修复
+1. `/api/graph/data` 改为封闭子图：先按连通度排序取实体，再只返回两端都在节点集内的 `RELATES_TO` 和共现边，不再截断边；返回 `isolated_count`。
+2. 前端只渲染出现在边里的节点，隐藏游离点，并在统计栏显示隐藏数量。
+3. 构建侧新增 `normalize_entity_name()`：实体 ID 按“去空格/统一大小写”归一，关系端点自动 `MERGE` 补齐，不再静默丢关系。
+4. 抽取提示词要求 `relations.source/target` 必须原样等于 `entities.name`，实体/关系上限提高，`max_tokens` 提到 2048。
+
+### 代码位置
+- app/api/graph_api.py — get_graph_data()、_flush_graph_batch()
+- app/rag/graph_rag.py — normalize_entity_name()、store_entities_relations()、EXTRACTION_PROMPT
+- app/static/js/app.js — renderGraphView()
+
+### 生效方式
+需启动 Neo4j 后点击“构建图谱”全量重建（`max_chunks=0`），新实体 ID 和关系补齐逻辑才会写入 Neo4j。
+
+*报告时间: 2026-08-02*
+*关联文件: app/api/graph_api.py, app/rag/graph_rag.py, app/static/js/app.js*

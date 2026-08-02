@@ -15,12 +15,14 @@ async def get_graph_data(
     search: str = Query(""),
     limit: int = Query(100),
 ):
-    """Return nodes and edges for vis-network force-directed graph."""
+    """Return a closed subgraph: edges are complete for the returned node set."""
     driver = _get_driver()
-    if not driver: return {"nodes": [], "edges": []}
+    if not driver:
+        return {"nodes": [], "edges": [], "kb_id": kb_id, "total_entities": 0, "total_relations": 0, "isolated_count": 0}
+    limit = max(1, min(limit, 500))
     nodes = []
     edges = []
-    edge_ids = set()
+    node_ids = []
 
     with driver.session(database=settings.neo4j_database) as session:
         # Get entities (nodes)
@@ -29,97 +31,131 @@ async def get_graph_data(
                 """
                 MATCH (e:Entity {kb_id: $kb_id})
                 WHERE e.name CONTAINS $search
-                OPTIONAL MATCH (e)-[:RELATES_TO]->(related:Entity {kb_id: $kb_id})
-                RETURN e, collect(DISTINCT related) AS neighbours
+                RETURN e
                 LIMIT $limit
                 """,
                 kb_id=kb_id, search=search, limit=limit,
             )
+            ids = {record["e"]["id"] for record in result}
+            if ids:
+                result = session.run(
+                    """
+                    MATCH (e:Entity {kb_id: $kb_id}) WHERE e.id IN $ids
+                    MATCH (e)-[:RELATES_TO]-(n:Entity {kb_id: $kb_id})
+                    RETURN DISTINCT n.id AS id
+                    LIMIT $limit
+                    """,
+                    kb_id=kb_id, ids=list(ids), limit=limit,
+                )
+                ids.update(record["id"] for record in result)
+                result = session.run(
+                    """
+                    MATCH (e:Entity {kb_id: $kb_id}) WHERE e.id IN $ids
+                    MATCH (e)-[:MENTIONED_IN]->(c:Chunk {kb_id: $kb_id})<-[:MENTIONED_IN]-(n:Entity {kb_id: $kb_id})
+                    WHERE NOT n.id IN $ids
+                    RETURN DISTINCT n.id AS id
+                    LIMIT $limit
+                    """,
+                    kb_id=kb_id, ids=list(ids), limit=limit,
+                )
+                ids.update(record["id"] for record in result)
+            node_ids = list(ids)[:limit]
         else:
             result = session.run(
                 """
                 MATCH (e:Entity {kb_id: $kb_id})
-                OPTIONAL MATCH (e)-[:RELATES_TO]->(related:Entity {kb_id: $kb_id})
-                RETURN e, collect(DISTINCT related) AS neighbours
+                OPTIONAL MATCH (e)-[:RELATES_TO]-(n:Entity {kb_id: $kb_id})
+                WITH e, count(n) AS rel_deg
+                OPTIONAL MATCH (e)-[:MENTIONED_IN]->(c:Chunk {kb_id: $kb_id})<-[:MENTIONED_IN]-(m:Entity {kb_id: $kb_id})
+                WHERE m IS NULL OR m <> e
+                WITH e, rel_deg, count(DISTINCT m) AS co_deg
+                RETURN e
+                ORDER BY rel_deg + co_deg DESC, e.name
                 LIMIT $limit
                 """,
                 kb_id=kb_id, limit=limit,
             )
+            node_ids = [record["e"]["id"] for record in result]
 
+        if not node_ids:
+            return {"nodes": [], "edges": [], "kb_id": kb_id, "total_entities": 0, "total_relations": 0, "isolated_count": 0}
+
+        # Fetch node properties for the selected node set.
+        result = session.run(
+            """
+            MATCH (e:Entity {kb_id: $kb_id})
+            WHERE e.id IN $ids
+            RETURN e
+            """,
+            kb_id=kb_id, ids=node_ids,
+        )
         seen_nodes = set()
         for record in result:
             e = record["e"]
             eid = e["id"]
-            if eid not in seen_nodes:
-                seen_nodes.add(eid)
-                nodes.append({
-                    "id": eid,
-                    "label": e.get("name", eid),
-                    "title": f"{e.get('type', '')}: {e.get('description', '')}",
-                    "group": e.get("type", "概念"),
-                    "color": _type_color(e.get("type", "")),
-                })
-            for neighbour in record.get("neighbours", []):
-                if neighbour is None:
-                    continue
-                nid = neighbour.get("id")
-                if nid and nid not in seen_nodes:
-                    seen_nodes.add(nid)
-                    nodes.append({
-                        "id": nid,
-                        "label": neighbour.get("name", nid),
-                        "title": f"{neighbour.get('type', '')}: {neighbour.get('description', '')}",
-                        "group": neighbour.get("type", "概念"),
-                        "color": _type_color(neighbour.get("type", "")),
-                    })
+            if eid in seen_nodes:
+                continue
+            seen_nodes.add(eid)
+            nodes.append({
+                "id": eid,
+                "label": e.get("name", eid),
+                "title": f"{e.get('type', '')}: {e.get('description', '')}",
+                "group": e.get("type", "概念"),
+                "color": _type_color(e.get("type", "")),
+            })
 
-        # Get edges (relations)
+        # All RELATES_TO edges whose endpoints are both in the node set.
         result = session.run(
             """
             MATCH (a:Entity {kb_id: $kb_id})-[r:RELATES_TO]->(b:Entity {kb_id: $kb_id})
+            WHERE a.id IN $ids AND b.id IN $ids
             RETURN a.id AS source, b.id AS target, r.type AS label, r.description AS desc
-            LIMIT $limit
             """,
-            kb_id=kb_id, limit=limit * 2,
+            kb_id=kb_id, ids=node_ids,
         )
+        edge_ids = set()
         for record in result:
             edge_key = f"{record['source']}->{record['target']}"
-            if edge_key not in edge_ids:
-                edge_ids.add(edge_key)
-                edges.append({
-                    "from": record["source"],
-                    "to": record["target"],
-                    "label": record["label"],
-                    "title": record.get("desc", ""),
-                    "arrows": "to",
-                })
+            if edge_key in edge_ids:
+                continue
+            edge_ids.add(edge_key)
+            edges.append({
+                "from": record["source"],
+                "to": record["target"],
+                "label": record["label"],
+                "title": record.get("desc", ""),
+                "arrows": "to",
+            })
 
-
-        # Step 3: co-occurrence edges (entities mentioned in same chunk)
+        # All co-occurrence edges whose endpoints are both in the node set.
         result = session.run(
             """
             MATCH (a:Entity {kb_id: $kb_id})-[:MENTIONED_IN]->(c:Chunk {kb_id: $kb_id})<-[:MENTIONED_IN]-(b:Entity {kb_id: $kb_id})
-            WHERE a.id < b.id
+            WHERE a.id IN $ids AND b.id IN $ids AND a.id < b.id
             RETURN a.id AS source, b.id AS target, count(c) AS shared_chunks
-            LIMIT $limit
             """,
-            kb_id=kb_id, limit=limit * 2,
+            kb_id=kb_id, ids=node_ids,
         )
         for record in result:
             edge_key = f"{record['source']}~~{record['target']}"
-            if edge_key not in edge_ids:
-                edge_ids.add(edge_key)
-                edges.append({
-                    "from": record["source"],
-                    "to": record["target"],
-                    "label": "共现",
-                    "title": f"同时出现在 {record['shared_chunks']} 个片段中",
-                    "arrows": "",
-                    "dashes": True,
-                })
+            if edge_key in edge_ids:
+                continue
+            edge_ids.add(edge_key)
+            edges.append({
+                "from": record["source"],
+                "to": record["target"],
+                "label": "共现",
+                "title": f"同时出现在 {record['shared_chunks']} 个片段中",
+                "arrows": "",
+                "dashes": True,
+            })
 
-
-    return {"nodes": nodes, "edges": edges, "kb_id": kb_id, "total_entities": len(nodes), "total_relations": len(edges)}
+    connected = set()
+    for edge in edges:
+        connected.add(edge["from"])
+        connected.add(edge["to"])
+    isolated_count = sum(1 for node in nodes if node["id"] not in connected)
+    return {"nodes": nodes, "edges": edges, "kb_id": kb_id, "total_entities": len(nodes), "total_relations": len(edges), "isolated_count": isolated_count}
 
 
 def _type_color(entity_type: str) -> str:
@@ -219,9 +255,9 @@ async def _build_graph_task(kb_id: str, max_chunks: int):
             prompt = ("你是知识图谱专家。从文档提取实体和关系。\n"
                 "JSON格式: {\"entities\":[{\"name\":\"实体\",\"type\":\"概念/技术/模型/工具/框架/算法/架构\",\"description\":\"描述\"}],"
                 "\"relations\":[{\"source\":\"源\",\"target\":\"目标\",\"relation\":\"包含/使用/依赖/实现/对比/属于/改进\",\"description\":\"描述\"}]}\n"
-                "规则: 提取所有技术实体, 不限数量。关系有明确依据。无实体返回空。\n"
+                "规则: 提取所有技术实体, 最多30个, 关系最多15条。relations的source/target必须严格等于entities中出现的name。关系有明确依据。无实体返回空。\n"
                 "片段:\n" + txt[:3000])
-            resp = llm.chat.completions.create(model=settings.graphrag_llm_model, messages=[{"role":"user","content":prompt}], temperature=0.3, max_tokens=1536)
+            resp = llm.chat.completions.create(model=settings.graphrag_llm_model, messages=[{"role":"user","content":prompt}], temperature=0.3, max_tokens=2048)
             raw = resp.choices[0].message.content.strip()
             m = _re.search(r"\{[\s\S]*\}", raw)
             if m:
@@ -249,27 +285,35 @@ async def _build_graph_task(kb_id: str, max_chunks: int):
 
 def _flush_graph_batch(ent_buf, rel_buf, kb_id):
     """Batch flush entities+relations to Neo4j."""
-    from app.rag.graph_rag import _get_driver, _safe_neo4j_value as _sv
+    from app.rag.graph_rag import _get_driver, _safe_neo4j_value as _sv, normalize_entity_name as _norm
     driver = _get_driver()
     if not driver: return
     with driver.session(database=settings.neo4j_database) as session:
         seen = {}
         for ent, ct, cid, did in ent_buf:
-            nm = _sv(ent.get("name", ""))
-            if not nm: continue
-            eid = f"{kb_id}:{nm}"
+            raw_nm = ent.get("name", "")
+            if not raw_nm.strip(): continue
+            nm = _sv(raw_nm.strip())
+            eid = f"{kb_id}:{_norm(raw_nm)}"
             if eid not in seen:
                 seen[eid] = (nm, _sv(ent.get("type", "概念")), _sv(ent.get("description", "")), ct, cid, did)
         for eid, (nm, tp, ds, ct, cid, did) in seen.items():
             session.run("MERGE (e:Entity {id:$eid}) SET e.name=$nm,e.type=$tp,e.description=$ds,e.kb_id=$kb,e.updated_at=timestamp() MERGE (e)-[:MENTIONED_IN]->(c:Chunk {id:$cid}) SET c.doc_id=$did,c.text=$ct,c.kb_id=$kb", eid=eid, nm=nm, tp=tp, ds=ds, kb=kb_id, cid=cid, did=did, ct=ct[:500])
         sr = set()
         for rel, ct, cid, did in rel_buf:
-            s = _sv(rel.get("source", ""))
-            t = _sv(rel.get("target", ""))
+            raw_s = rel.get("source", "")
+            raw_t = rel.get("target", "")
+            s = _sv(raw_s.strip())
+            t = _sv(raw_t.strip())
             rt = _sv(rel.get("relation", "相关"))
             rd = _sv(rel.get("description", ""))
-            if not s or not t: continue
-            rk = (f"{kb_id}:{s}", f"{kb_id}:{t}", rt)
+            if not s or not t or s == t: continue
+            rk = (f"{kb_id}:{_norm(raw_s)}", f"{kb_id}:{_norm(raw_t)}", rt)
             if rk not in sr:
                 sr.add(rk)
-                session.run("MATCH (a:Entity {id:$s}),(b:Entity {id:$t}) MERGE (a)-[r:RELATES_TO {type:$rt}]->(b) SET r.description=$rd,r.kb_id=$kb,r.updated_at=timestamp()", s=rk[0], t=rk[1], rt=rt, rd=rd, kb=kb_id)
+                session.run(
+                    "MERGE (a:Entity {id:$s}) SET a.name=$sn,a.type=coalesce(a.type,'概念'),a.kb_id=$kb,a.updated_at=timestamp() "
+                    "MERGE (b:Entity {id:$t}) SET b.name=$tn,b.type=coalesce(b.type,'概念'),b.kb_id=$kb,b.updated_at=timestamp() "
+                    "MERGE (a)-[r:RELATES_TO {type:$rt}]->(b) SET r.description=$rd,r.kb_id=$kb,r.updated_at=timestamp()",
+                    s=rk[0], sn=s, t=rk[1], tn=t, rt=rt, rd=rd, kb=kb_id,
+                )

@@ -104,8 +104,9 @@ EXTRACTION_PROMPT = """你是一个知识图谱构建专家。从以下文档片
 1. 只提取有意义的、技术相关的实体
 2. 实体名必须精确，使用文档中出现的标准名称
 3. 关系必须有明确依据，不要臆造
-4. 每个片段最多提取 5 个实体和 5 条关系，宁缺毋滥
-5. 如果片段中没有明确的可提取实体，返回 {"entities": [], "relations": []}
+4. 每个片段最多提取 20 个实体和 10 条关系，宁缺毋滥
+5. relations 的 source/target 必须原样等于 entities 中出现的 name，不得改写、缩写或增删空格
+6. 如果片段中没有明确的可提取实体，返回 {"entities": [], "relations": []}
 
 文档片段：
 {chunk_text}
@@ -155,7 +156,7 @@ def _call_extraction_llm(prompt: str) -> str:
         model=settings.graphrag_llm_model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
-        max_tokens=1024,
+        max_tokens=2048,
     )
     return resp.choices[0].message.content.strip()
 
@@ -167,6 +168,13 @@ def _call_extraction_llm(prompt: str) -> str:
 def _safe_neo4j_value(val: str) -> str:
     """Escape single quotes in Neo4j string values."""
     return val.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def normalize_entity_name(name: str) -> str:
+    """Normalize entity names so whitespace/case variants share one node ID."""
+    if not name:
+        return ""
+    return re.sub(r"\s+", " ", name).strip().lower()
 
 
 def store_entities_relations(
@@ -186,10 +194,13 @@ def store_entities_relations(
     with driver.session(database=settings.neo4j_database) as session:
         # Merge entities
         for ent in entities:
-            name = _safe_neo4j_value(ent.get("name", ""))
+            raw_name = ent.get("name", "")
+            name = _safe_neo4j_value(raw_name.strip())
             etype = _safe_neo4j_value(ent.get("type", "概念"))
             desc = _safe_neo4j_value(ent.get("description", ""))
-            eid = f"{kb_id}:{name}"
+            eid = f"{kb_id}:{normalize_entity_name(raw_name)}"
+            if not raw_name.strip():
+                continue
             session.run(
                 """
                 MERGE (e:Entity {id: $eid})
@@ -204,17 +215,22 @@ def store_entities_relations(
 
         # Merge relations
         for rel in relations:
-            src = _safe_neo4j_value(rel.get("source", ""))
-            tgt = _safe_neo4j_value(rel.get("target", ""))
+            raw_src = rel.get("source", "")
+            raw_tgt = rel.get("target", "")
+            src = _safe_neo4j_value(raw_src.strip())
+            tgt = _safe_neo4j_value(raw_tgt.strip())
             rtype = _safe_neo4j_value(rel.get("relation", "相关"))
             rdesc = _safe_neo4j_value(rel.get("description", ""))
-            if not src or not tgt:
+            if not src or not tgt or src == tgt:
                 continue
-            src_id = f"{kb_id}:{src}"
-            tgt_id = f"{kb_id}:{tgt}"
+            src_id = f"{kb_id}:{normalize_entity_name(raw_src)}"
+            tgt_id = f"{kb_id}:{normalize_entity_name(raw_tgt)}"
             session.run(
                 """
-                MATCH (a:Entity {id: $src_id}), (b:Entity {id: $tgt_id})
+                MERGE (a:Entity {id: $src_id})
+                SET a.name = $src, a.type = coalesce(a.type, '概念'), a.kb_id = $kb_id, a.updated_at = timestamp()
+                MERGE (b:Entity {id: $tgt_id})
+                SET b.name = $tgt, b.type = coalesce(b.type, '概念'), b.kb_id = $kb_id, b.updated_at = timestamp()
                 MERGE (a)-[r:RELATES_TO {type: $rtype}]->(b)
                 SET r.description = $rdesc, r.kb_id = $kb_id, r.updated_at = timestamp()
                 """,

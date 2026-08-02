@@ -16,6 +16,22 @@
   window.toggleGraphRag = toggleGraphRag;
 
   function $(id) { return document.getElementById(id); }
+
+  // Session view helper: returns or creates session-specific DOM container
+  function cv(sid) {
+    sid = sid || state.sessionId;
+    var cm = document.getElementById("chatMessages");
+    if (!cm) return null;
+    var view = cm.querySelector('.session-view[data-sid="' + sid + '"]');
+    if (!view) {
+      view = document.createElement("div");
+      view.className = "session-view";
+      view.setAttribute("data-sid", sid);
+      cm.appendChild(view);
+    }
+    return view;
+  }
+
   function esc(s) { var d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
   function stripMd(s) { return (s||"").replace(/[#*_`~>|]/g, "").trim(); }
   function renderSources(srcs) {
@@ -86,9 +102,21 @@
   }
 
   function sws(sid) {
-    if (state.abortController) { state.abortController.abort(); }
+    if (sid === state.sessionId) return;
+    // Hide all views, show target
+    var cm = document.getElementById("chatMessages");
+    if (cm) {
+      cm.querySelectorAll(".session-view").forEach(function(v) {
+        v.style.display = (v.getAttribute("data-sid") === sid) ? "" : "none";
+      });
+    }
     state.sessionId = sid; localStorage.setItem("kb_session_id", sid);
-    rsl(); lch(); scv();
+    // Load history if view is empty
+    var view = cv(sid);
+    if (!view.querySelector(".message") && !view.querySelector(".chat-empty")) {
+      lch();
+    }
+    rsl(); scv();
   }
 
   function dls(sid) {
@@ -104,7 +132,7 @@
 
   function sns() {
     state.sessionId = gid(); localStorage.setItem("kb_session_id", state.sessionId);
-    $("chatMessages").innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><p>开始一段新的对话吧</p><p class="chat-empty-hint">在下方输入你的问题，AI 会基于知识库为你解答</p></div>';
+    cv(state.sessionId).innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><p>开始一段新的对话吧</p><p class="chat-empty-hint">在下方输入你的问题，AI 会基于知识库为你解答</p></div>';
     $("sourcesList").innerHTML = '<p class="sources-empty">-</p>';
     uts(state.sessionId); rsl(); scv(); $("chatInput").focus();
   }
@@ -166,25 +194,29 @@
     return d;
   }
 
-  function ams(role, txt) {
+  function ams(role, txt, sid) {
     var d = document.createElement("div");
     d.className = "message " + role;
     d.innerHTML = '<div class="message-avatar">' + (role === "assistant" ? "AI" : "Me") +
       '</div><div class="message-content"><p></p></div>';
     if (txt) d.querySelector("p").textContent = txt;
-    var ce = document.getElementById("chatMessages").querySelector(".chat-empty");
-    if (ce) document.getElementById("chatMessages").innerHTML = "";
-    document.getElementById("chatMessages").appendChild(d);
+    var v = cv(sid);
+    if (v) {
+      var ce = v.querySelector(".chat-empty");
+      if (ce) v.innerHTML = "";
+      v.appendChild(d);
+    }
     stb();
     return d;
   }
 
-  function atb(name) {
+  function atb(name, sid) {
     var d = document.createElement("div");
     d.className = "message-tool";
     d.innerHTML = '<span class="tool-icon">&#9881;</span>' +
       '<span class="tool-label">[Tool] ' + esc(name) + '</span>';
-    $("chatMessages").appendChild(d);
+    var v = cv(sid);
+    if (v) v.appendChild(d);
     stb();
   }
 
@@ -192,7 +224,8 @@
     var inp = $("chatInput"); var txt = inp.value.trim();
     if (!txt || state.streaming) return;
     inp.value = ""; inp.style.height = "auto";
-    ams("user", txt);
+    var mySid = state.sessionId;
+    ams("user", txt, mySid);
 
     var l = gsl(); var f = l.find(function(s) { return s.id === state.sessionId; });
     if (f && !f.label) {
@@ -216,8 +249,8 @@
       d.className = "message assistant thinking";
       d.innerHTML = '<div class="message-avatar">&#128269;</div>' +
         '<div class="message-content"><div class="thinking-label">正在分析问题...</div></div>';
-      var cm = document.getElementById("chatMessages");
-      if (cm) { cm.appendChild(d); stb(); }
+      var v = cv(mySid);
+      if (v) { v.appendChild(d); stb(); }
       return d;
     }
 
@@ -226,8 +259,8 @@
       d.className = "message assistant";
       d.innerHTML = '<div class="message-avatar">AI</div>' +
         '<div class="message-content"><p class="stream-text"></p></div>';
-      var cm = document.getElementById("chatMessages");
-      if (cm) { cm.appendChild(d); stb(); }
+      var v = cv(mySid);
+      if (v) { v.appendChild(d); stb(); }
       return d;
     }
 
@@ -282,7 +315,7 @@
           }
           if (dt.startsWith("__TOOL_RESULT__:")) continue;
           if (dt.startsWith("__SOURCES__:")) {
-            try { var srcs = JSON.parse(dt.slice(12)); renderSources(srcs); } catch(e) {}
+            try { var srcs = JSON.parse(dt.slice(12)); console.log("SOURCES raw length:", dt.length, "parsed:", srcs.length, "items"); renderSources(srcs); } catch(e) { console.warn("SOURCES parse failed, raw prefix:", dt.substring(0,30)); }
             continue;
           }
           // text content -> answer bubble
@@ -306,7 +339,6 @@
         rmd(answerDiv.querySelector("p"), full);
       }
       uts(state.sessionId);
-      setTimeout(function() { lss(); }, 500);
 
     } catch(e) {
       if (state.abortController && state.abortController.signal.aborted) { /* user navigated away */ }
@@ -322,16 +354,17 @@
     cm._paginateOffset = 0;
     cm._paginateHasMore = true;
     cm._loadingMore = false;
+    var v = cv(state.sessionId); if (!v) return;
     try {
       var resp = await fetch("/api/chat/history/" + state.sessionId + "?offset=0&limit=20");
       if (!resp.ok) {
-        cm.innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><p>开始一段新的对话吧</p><p class="chat-empty-hint">在下方输入你的问题，AI 会基于知识库为你解答</p></div>';
+        v.innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><p>开始一段新的对话吧</p><p class="chat-empty-hint">在下方输入你的问题，AI 会基于知识库为你解答</p></div>';
         return;
       }
       var data = await resp.json();
       cm._paginateHasMore = data.has_more;
       cm._paginateOffset = (data.history || []).length;
-      cm.innerHTML = "";
+      v.innerHTML = "";
       (data.history || []).forEach(function(m) {
         // Show tool calls as thinking bubble (same style as streaming)
         if (m.role === "assistant" && m.tool_calls && m.tool_calls.length) {
@@ -339,20 +372,18 @@
           thinkDiv.className = "message assistant thinking";
           var toolNames = m.tool_calls.map(function(tc) { return tc.tool_name; }).join(", ");
           thinkDiv.innerHTML = '<div class="message-avatar">&#128269;</div><div class="message-content"><div class="thinking-label">调用工具: ' + esc(toolNames) + '</div></div>';
-          var cm2 = document.getElementById("chatMessages");
-          if (cm2) cm2.appendChild(thinkDiv);
+          if (v) v.appendChild(thinkDiv);
         }
         // Answer bubble
         var el = makeMsg(m.role === "user" ? "user" : "assistant", "");
-        var cm3 = document.getElementById("chatMessages");
-        if (cm3) cm3.appendChild(el);
+        if (v) v.appendChild(el);
         rmd(el.querySelector("p"), m.content || "");
       });
       if (cm._paginateHasMore) {
         var moreDiv = document.createElement("div");
         moreDiv.className = "load-more-indicator";
         moreDiv.textContent = "↑ 向上滑动加载更多...";
-        cm.insertBefore(moreDiv, cm.firstChild);
+        v.insertBefore(moreDiv, v.firstChild);
       }
       cm.onscroll = function() {
         if (cm.scrollTop < 80 && cm._paginateHasMore && !cm._loadingMore) {
@@ -361,14 +392,15 @@
         }
       };
       stb();
-    } catch(e) { cm.innerHTML = ""; }
+    } catch(e) { if (v) v.innerHTML = ""; }
   }
 
   async function lchMore() {
     var cm = document.getElementById("chatMessages");
     if (!cm || !cm._paginateHasMore || cm._loadingMore) return;
-    var ce = cm.querySelector(".chat-empty");
-    if (ce) cm.innerHTML = "";
+    var v = cv(state.sessionId); if (!v) return;
+    var ce = v.querySelector(".chat-empty");
+    if (ce) v.innerHTML = "";
     cm._loadingMore = true;
     try {
       var offset = cm._paginateOffset;
@@ -378,7 +410,7 @@
       cm._paginateHasMore = data.has_more;
       cm._paginateOffset += (data.history || []).length;
       var oldHeight = cm.scrollHeight;
-      var indicator = cm.querySelector(".load-more-indicator");
+      var indicator = v.querySelector(".load-more-indicator");
       if (indicator) indicator.remove();
       var msgs = data.history || [];
       for (var i = msgs.length - 1; i >= 0; i--) {
@@ -388,19 +420,19 @@
             var td = document.createElement("div");
             td.className = "message-tool";
             td.innerHTML = '<span class="tool-icon">&#9881;</span><span class="tool-label">[Tool] ' + esc(m.tool_calls[j].tool_name) + '</span>';
-            cm.insertBefore(td, cm.firstChild);
+            v.insertBefore(td, v.firstChild);
           }
         }
         var el = makeMsg(m.role === "user" ? "user" : "assistant", "");
         rmd(el.querySelector("p"), m.content || "");
-        cm.insertBefore(el, cm.firstChild);
+        v.insertBefore(el, v.firstChild);
       }
       cm.scrollTop = cm.scrollHeight - oldHeight;
       if (cm._paginateHasMore) {
         var moreDiv = document.createElement("div");
         moreDiv.className = "load-more-indicator";
         moreDiv.textContent = "↑ 向上滑动加载更多...";
-        cm.insertBefore(moreDiv, cm.firstChild);
+        v.insertBefore(moreDiv, v.firstChild);
       }
       cm.onscroll = function() {
         if (cm.scrollTop < 80 && cm._paginateHasMore && !cm._loadingMore) {
@@ -792,18 +824,27 @@ async function ckb() {
     try {
       var resp = await fetch(url);
       var data = await resp.json();
-      var stats = $("graphStats"); if (stats) stats.textContent = data.total_entities + " entities, " + data.total_relations + " relations";
+
+      var connectedIds = {};
+      (data.edges || []).forEach(function(e) { connectedIds[e.from] = true; connectedIds[e.to] = true; });
+      var visibleNodes = (data.nodes || []).filter(function(n) { return !!connectedIds[n.id]; });
+
+      var stats = $("graphStats");
+      if (stats) {
+        stats.textContent = visibleNodes.length + " entities, " + (data.edges || []).length + " relations" +
+          ((data.isolated_count || 0) > 0 ? " (" + data.isolated_count + " isolated hidden)" : "");
+      }
 
       var container = $("graphContainer");
       if (!container) return;
       container.innerHTML = "";
 
-      if (!data.nodes || data.nodes.length === 0) {
+      if (visibleNodes.length === 0) {
         container.innerHTML = '<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#94a3b8;font-size:15px">该知识库暂无图谱数据，请先上传文档</div>';
         return;
       }
 
-      var nodes = new vis.DataSet(data.nodes.map(function(n) {
+      var nodes = new vis.DataSet(visibleNodes.map(function(n) {
         return {
           id: n.id, label: n.label, title: n.title, group: n.group,
           color: { background: n.color || "#6b7280", border: "#374151" },
@@ -813,7 +854,7 @@ async function ckb() {
 
       var edges = new vis.DataSet(data.edges.map(function(e) {
         return {
-          from: e.from, to: e.to, label: e.label, title: e.title, arrows: "to",
+          from: e.from, to: e.to, label: e.label, title: e.title, arrows: e.arrows || undefined, dashes: !!e.dashes,
           color: { color: "#475569", highlight: "#f59e0b" },
           font: { color: "#94a3b8", size: 11, strokeWidth: 0 }
         };
