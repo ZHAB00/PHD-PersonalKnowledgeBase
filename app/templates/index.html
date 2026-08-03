@@ -4,9 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>企业知识库</title>
-<link rel="stylesheet" href="/static/css/style.css?v=24">
+  <link rel="stylesheet" href="/static/css/style.css?v=28">
   <script src="https://unpkg.com/vis-network@9.1.6/dist/vis-network.min.js"></script>
   <link href="https://unpkg.com/vis-network@9.1.6/dist/vis-network.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
@@ -93,15 +95,56 @@
   </section>
   <section id="view-graph" class="view">
     <div class="graph-toolbar">
-      <div class="kb-selector" id="graphKbSelector">
+      <label class="graph-kb-label" for="graphKbSelect">
+        <span>知识库</span>
         <select id="graphKbSelect"><option value="default">默认知识库</option></select>
+      </label>
+      <div class="graph-search-wrap">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" class="graph-search" id="graphSearch" placeholder="搜索实体" autocomplete="off">
       </div>
-      <input type="text" class="graph-search" id="graphSearch" placeholder="搜索实体...">
-      <button class="btn btn-sm" id="graphRefresh">刷新</button>
-      <button class="btn btn-sm btn-primary" id="graphBuild">构建图谱</button>
+      <button class="graph-tool-btn" id="graphRefresh" title="刷新图谱">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        <span>刷新</span>
+      </button>
+      <button class="graph-tool-btn graph-tool-btn-primary" id="graphBuild" title="构建图谱">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+        <span>构建</span>
+      </button>
+      <div class="graph-mode-toggle" id="graphModeToggle" role="group" aria-label="图谱显示模式">
+        <button class="graph-mode-btn active" id="graphMode2d" title="平面布局">2D</button>
+        <button class="graph-mode-btn" id="graphMode3d" title="3D 球面布局">3D</button>
+      </div>
+      <label class="graph-design-label hidden" id="graphDesignWrap" for="graphDesign">
+        <span>设计</span>
+        <select id="graphDesign">
+          <option value="stellar">星际星云</option>
+          <option value="hologram">全息晶体</option>
+          <option value="neon">霓虹电路</option>
+          <option value="minimal">浅色极简</option>
+        </select>
+      </label>
       <span class="graph-stats" id="graphStats"></span>
     </div>
-    <div class="graph-container" id="graphContainer"></div>
+    <div class="graph-stage">
+      <div class="graph-container" id="graphContainer"></div>
+      <div class="graph-loading" id="graphLoading">
+        <span class="graph-spinner"></span>
+        <span>正在加载图谱...</span>
+      </div>
+      <div class="graph-legend" id="graphLegend"></div>
+      <div class="graph-controls" id="graphControls">
+        <button class="graph-control-btn" id="graphFit" title="适应画布">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+        </button>
+        <button class="graph-control-btn" id="graphZoomIn" title="放大">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+        </button>
+        <button class="graph-control-btn" id="graphZoomOut" title="缩小">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+        </button>
+      </div>
+    </div>
   </section>
 </main>
 
@@ -154,7 +197,7 @@
 var _t = localStorage.getItem("kb_token");
 if (!_t) { window.location.href = "/login"; }
 </script>
-<script src="/static/js/app.js?v=48"></script>
+  <script src="/static/js/app.js?v=54"></script>
 </body>
 </html>
 

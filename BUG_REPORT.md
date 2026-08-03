@@ -296,3 +296,23 @@ app/static/js/app.js — switchView() 函数
 
 *报告时间: 2026-08-02*
 *关联文件: app/api/graph_api.py, app/rag/graph_rag.py, app/static/js/app.js*
+
+---
+
+## Bug 8: vis-network improvedLayout 配置位置错误
+
+### 影响
+图谱渲染时控制台报 `This network could not be positioned by this version of the improved layout algorithm`，
+布局算法退化且不稳定；旧配置把 `improvedLayout: false` 放进了 `physics`，实际应放在 `layout`。
+
+### 修复
+1. `improvedLayout: false` 移到 `layout` 配置，并设置固定 `randomSeed`。
+2. 图谱 UI 同步重做：深色网格画布、实体类型图例、度大小自适应、节点标签描边、显式关系/片段共现线型区分、加载态、适应画布和缩放控制。
+
+### 代码位置
+app/static/js/app.js — renderGraphView()、buildGraphLegend()、fitGraph()、zoomGraph()
+app/static/css/style.css — Graph View 区块
+app/templates/index.html — #view-graph 区块
+
+*报告时间: 2026-08-02*
+*关联文件: app/static/js/app.js, app/static/css/style.css, app/templates/index.html*

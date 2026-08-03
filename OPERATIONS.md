@@ -525,3 +525,21 @@ egister_builtin_tools() 已无实际逻辑（tools 是模块级 @tool 装饰器�
 ### 测试结果
 - 37/37 passed
 - Neo4j 数据: 5 entities + 3 relations (test_kb) 验证通过
+
+## 2026-08-03 - 3D 图谱多设计模式
+
+### 修改文件
+| 文件 | 改动 |
+|------|------|
+| app/templates/index.html | 新增 3D 设计下拉框（星际星云/全息晶体/霓虹电路/浅色极简），版本号 CSS v=28、JS v=54 |
+| app/static/js/app.js | state.graphDesign + setGraphDesign()；renderGraph3D 重构为共享渲染管线 + buildDesignScene3D()；新增屏幕空间标签层，节点布局改为带径向扰动的自然簇状 |
+| app/static/css/style.css | 新增设计下拉框样式与 .graph3d-label 屏幕标签样式（含四种设计的差异化标签） |
+
+### 具体改动
+1. **四套设计**: 星际星云（星空粒子+光晕）、全息晶体（网格地面+八面体节点+轨道环）、霓虹电路（霓虹节点+脉冲光+线框外壳）、浅色极简（浅色背景+无装饰节点+白底标签）。
+2. **名字可见性**: 原 Three.js Sprite 标签尺寸过小导致 3D 下看不到名字，改为 DOM 屏幕空间标签，180 个实体全部清晰显示，悬停节点时标签同步高亮。
+3. **自然布局**: 正球壳排列改为按节点度数调整半径 + 稳定哈希抖动，避免规整的“水晶球”观感。
+
+### 测试结果
+- node --check app/static/js/app.js 通过
+- Playwright 真浏览器验证: 180 labels 全部可见、四套设计切换无 pageerror、页面无滚动溢出
