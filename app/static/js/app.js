@@ -1248,6 +1248,34 @@ async function ckb() {
   on("graphDesign", "change", function() { setGraphDesign(this.value); });
   on("chatInput", "keydown", function(e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sdm(); } });
   on("chatInput", "input", function() { var ci = $("chatInput"); ci.style.height = "auto"; ci.style.height = Math.min(ci.scrollHeight, 120) + "px"; });
+  document.querySelectorAll(".settings-nav-item").forEach(function(btn) {
+    btn.addEventListener("click", function() {
+      var target = document.getElementById(btn.getAttribute("data-target"));
+      var body = document.querySelector("#view-settings .settings-body");
+      if (target && body) {
+        var top = target.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop - 20;
+        body.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+      }
+      document.querySelectorAll(".settings-nav-item").forEach(function(x) { x.classList.remove("active"); });
+      btn.classList.add("active");
+    });
+  });
+  var settingsScrollBody = document.querySelector("#view-settings .settings-body");
+  if (settingsScrollBody) {
+    settingsScrollBody.addEventListener("scroll", function() {
+      var body = this;
+      var sections = Array.prototype.slice.call(document.querySelectorAll("#view-settings .settings-group"));
+      var current = sections[0];
+      var pos = body.scrollTop + 120;
+      sections.forEach(function(sec) {
+        var top = sec.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
+        if (top <= pos) current = sec;
+      });
+      document.querySelectorAll(".settings-nav-item").forEach(function(n) {
+        n.classList.toggle("active", n.getAttribute("data-target") === current.id);
+      });
+    });
+  }
   on("chatKbSelect", "change", function() { swChatKb($("chatKbSelect").value); });
   on("kbSelect", "change", function() { swDocKb($("kbSelect").value); });
   on("uploadZone", "click", function(e) { if (e.target.tagName !== "A") { var fi = $("fileInput"); if (fi) fi.click(); } });

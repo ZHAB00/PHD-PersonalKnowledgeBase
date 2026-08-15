@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PDH-PKG</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=39">
+  <link rel="stylesheet" href="/static/css/style.css?v=40">
   <script src="https://unpkg.com/vis-network@9.1.6/dist/vis-network.min.js"></script>
   <link href="https://unpkg.com/vis-network@9.1.6/dist/vis-network.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
@@ -150,85 +150,220 @@
     </div>
   </section>
 
-  <section id="view-settings" class="view">
+    <section id="view-settings" class="view">
     <div class="view-header settings-header">
       <div class="settings-header-left">
         <button class="icon-btn" id="settingsBack" title="返回对话" aria-label="返回对话">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
         </button>
-        <h2>设置</h2>
+        <div class="settings-heading">
+          <h2>设置</h2>
+          <p>对话、向量、搜索与知识图谱配置</p>
+        </div>
       </div>
-      <button class="btn btn-primary" id="saveSettings">保存设置</button>
+      <div class="settings-header-actions">
+        <span class="settings-save-state" id="settingsSaveResult"></span>
+        <button class="btn btn-primary settings-save-btn" id="saveSettings">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          保存设置
+        </button>
+      </div>
     </div>
     <div class="settings-loading" id="settingsLoading" style="display:none">
       <span class="spinner"></span><span>正在加载设置...</span>
     </div>
     <div class="settings-body">
-      <div class="settings-group">
-        <h3><span class="settings-group-index">1</span>对话模型</h3>
-        <label>类型
-          <select id="setChatProvider">
-            <option value="deepseek">DeepSeek（云端）</option>
-            <option value="openai_compatible">OpenAI 兼容（云端）</option>
-            <option value="ollama">Ollama（本地）</option>
-            <option value="lmstudio">LM Studio / llama.cpp（本地）</option>
-          </select>
-        </label>
-        <label>Base URL <input id="setChatBaseUrl" placeholder="留空使用默认"></label>
-        <label>API Key <input id="setChatApiKey" type="password" placeholder="云端必填，本地可留空"></label>
-        <label>模型名 <input id="setChatModel" placeholder="例如 deepseek-v4-flash / qwen2.5:7b"></label>
-        <label><input type="checkbox" id="setChatThinking"> 启用思考模式（DeepSeek）</label>
-        <button class="btn" id="testChat">测试连接</button>
-        <p class="settings-hint" id="chatTestResult"></p>
-      </div>
-      <div class="settings-group">
-        <h3><span class="settings-group-index">2</span>向量化模型</h3>
-        <label>类型
-          <select id="setEmbeddingProvider">
-            <option value="ollama">Ollama（本地，默认）</option>
-            <option value="local">内置本地模型（ONNX，首次使用自动下载）</option>
-            <option value="openai_compatible">OpenAI 兼容（云端）</option>
-          </select>
-        </label>
-        <label>模型 <input id="setEmbeddingModel" placeholder="默认 qwen3-embedding:4b"></label>
-        <label>Base URL <input id="setEmbeddingBaseUrl" placeholder="Ollama/云端填，内置留空"></label>
-        <label>API Key <input id="setEmbeddingApiKey" type="password" placeholder="云端必填"></label>
-        <button class="btn" id="testEmbedding">测试连接</button>
-        <p class="settings-hint" id="embeddingTestResult"></p>
-      </div>
-      <div class="settings-group">
-        <h3><span class="settings-group-index">3</span>联网搜索</h3>
-        <p class="settings-hint">自动模式无需 API Key：优先 Bing，失败自动切换 DuckDuckGo。</p>
-        <label>类型
-          <select id="setSearchProvider">
-            <option value="auto">自动（推荐）</option>
-            <option value="tavily">Tavily</option>
-            <option value="searxng">SearXNG（自建）</option>
-            <option value="bing">Bing 网页搜索</option>
-            <option value="duckduckgo">DuckDuckGo</option>
-          </select>
-        </label>
-        <label>Base URL <input id="setSearchBaseUrl" placeholder="Tavily/SearXNG 填，Bing/DuckDuckGo 留空"></label>
-        <label>API Key <input id="setSearchApiKey" type="password" placeholder="Tavily 必填，其他可留空"></label>
-        <button class="btn" id="testSearch">测试连接</button>
-        <p class="settings-hint" id="searchTestResult"></p>
-      </div>
-      <div class="settings-group">
-        <h3><span class="settings-group-index">4</span>知识图谱（Neo4j，可选）</h3>
-        <label><input type="checkbox" id="setNeo4jEnabled"> 启用 Neo4j 知识图谱</label>
-        <label>地址 <input id="setNeo4jUri" value="bolt://localhost:7687"></label>
-        <label>账号 <input id="setNeo4jUser" value="neo4j"></label>
-        <label>密码 <input id="setNeo4jPassword" type="password"></label>
-        <label>数据库 <input id="setNeo4jDatabase" value="neo4j"></label>
-        <button class="btn" id="testNeo4j">测试连接</button>
-        <p class="settings-hint" id="neo4jTestResult"></p>
-      </div>
-      <div class="settings-group">
-        <h3><span class="settings-group-index">5</span>访问与存储</h3>
-        <label><input type="checkbox" id="setRequirePassword"> 开启访问密码（默认免登录）</label>
-        <label>密码 <input id="setPassword" type="password" placeholder="留空不修改"></label>
-        <p class="settings-hint">数据目录：<span id="setDataDir"></span></p>
-        <p class="settings-hint" id="settingsSaveResult"></p>
+      <div class="settings-layout">
+        <aside class="settings-nav" id="settingsNav">
+          <div class="settings-nav-title">配置项</div>
+          <button class="settings-nav-item active" type="button" data-target="settings-chat"><span class="settings-nav-num">01</span><span>对话模型</span></button>
+          <button class="settings-nav-item" type="button" data-target="settings-embedding"><span class="settings-nav-num">02</span><span>向量化模型</span></button>
+          <button class="settings-nav-item" type="button" data-target="settings-search"><span class="settings-nav-num">03</span><span>联网搜索</span></button>
+          <button class="settings-nav-item" type="button" data-target="settings-graph"><span class="settings-nav-num">04</span><span>知识图谱</span></button>
+          <button class="settings-nav-item" type="button" data-target="settings-storage"><span class="settings-nav-num">05</span><span>访问与存储</span></button>
+        </aside>
+        <div class="settings-content">
+          <section class="settings-group" id="settings-chat">
+            <div class="settings-group-head">
+              <span class="settings-group-icon">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              </span>
+              <div>
+                <h3>对话模型</h3>
+                <p>配置对话模型的提供商、地址与密钥。</p>
+              </div>
+            </div>
+            <div class="settings-fields">
+              <label class="settings-field">
+                <span>类型</span>
+                <select id="setChatProvider">
+                  <option value="deepseek">DeepSeek（云端）</option>
+                  <option value="openai_compatible">OpenAI 兼容（云端）</option>
+                  <option value="ollama">Ollama（本地）</option>
+                  <option value="lmstudio">LM Studio / llama.cpp（本地）</option>
+                </select>
+              </label>
+              <label class="settings-field">
+                <span>模型名</span>
+                <input id="setChatModel" placeholder="例如 deepseek-v4-flash / qwen2.5:7b">
+              </label>
+              <label class="settings-field">
+                <span>Base URL</span>
+                <input id="setChatBaseUrl" placeholder="留空使用默认">
+              </label>
+              <label class="settings-field">
+                <span>API Key</span>
+                <input id="setChatApiKey" type="password" placeholder="云端必填，本地可留空">
+              </label>
+              <label class="settings-toggle">
+                <input type="checkbox" id="setChatThinking">
+                <span>启用思考模式（DeepSeek）</span>
+              </label>
+            </div>
+            <div class="settings-actions">
+              <button class="btn" id="testChat">测试连接</button>
+              <p class="settings-hint" id="chatTestResult"></p>
+            </div>
+          </section>
+
+          <section class="settings-group" id="settings-embedding">
+            <div class="settings-group-head">
+              <span class="settings-group-icon">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              </span>
+              <div>
+                <h3>向量化模型</h3>
+                <p>用于文档分块检索与长期记忆的向量模型。</p>
+              </div>
+            </div>
+            <div class="settings-fields">
+              <label class="settings-field">
+                <span>类型</span>
+                <select id="setEmbeddingProvider">
+                  <option value="ollama">Ollama（本地，默认）</option>
+                  <option value="local">内置本地模型（ONNX，首次使用自动下载）</option>
+                  <option value="openai_compatible">OpenAI 兼容（云端）</option>
+                </select>
+              </label>
+              <label class="settings-field">
+                <span>模型</span>
+                <input id="setEmbeddingModel" placeholder="默认 qwen3-embedding:4b">
+              </label>
+              <label class="settings-field">
+                <span>Base URL</span>
+                <input id="setEmbeddingBaseUrl" placeholder="Ollama/云端填，内置留空">
+              </label>
+              <label class="settings-field">
+                <span>API Key</span>
+                <input id="setEmbeddingApiKey" type="password" placeholder="云端必填">
+              </label>
+            </div>
+            <div class="settings-actions">
+              <button class="btn" id="testEmbedding">测试连接</button>
+              <p class="settings-hint" id="embeddingTestResult"></p>
+            </div>
+          </section>
+
+          <section class="settings-group" id="settings-search">
+            <div class="settings-group-head">
+              <span class="settings-group-icon">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              </span>
+              <div>
+                <h3>联网搜索</h3>
+                <p>自动模式无需 API Key，优先 Bing 并自动切换 DuckDuckGo。</p>
+              </div>
+            </div>
+            <div class="settings-fields">
+              <label class="settings-field">
+                <span>类型</span>
+                <select id="setSearchProvider">
+                  <option value="auto">自动（推荐）</option>
+                  <option value="tavily">Tavily</option>
+                  <option value="searxng">SearXNG（自建）</option>
+                  <option value="bing">Bing 网页搜索</option>
+                  <option value="duckduckgo">DuckDuckGo</option>
+                </select>
+              </label>
+              <label class="settings-field">
+                <span>Base URL</span>
+                <input id="setSearchBaseUrl" placeholder="Tavily/SearXNG 填，Bing/DuckDuckGo 留空">
+              </label>
+              <label class="settings-field wide">
+                <span>API Key</span>
+                <input id="setSearchApiKey" type="password" placeholder="Tavily 必填，其他可留空">
+              </label>
+            </div>
+            <div class="settings-actions">
+              <button class="btn" id="testSearch">测试连接</button>
+              <p class="settings-hint" id="searchTestResult"></p>
+            </div>
+          </section>
+
+          <section class="settings-group" id="settings-graph">
+            <div class="settings-group-head">
+              <span class="settings-group-icon">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v5"/><path d="M6.5 17.5 11 12"/><path d="M13 12l4.5 5.5"/></svg>
+              </span>
+              <div>
+                <h3>知识图谱</h3>
+                <p>可选 Neo4j 知识图谱，用于实体关系检索与图谱增强。</p>
+              </div>
+            </div>
+            <div class="settings-fields">
+              <label class="settings-toggle">
+                <input type="checkbox" id="setNeo4jEnabled">
+                <span>启用 Neo4j 知识图谱</span>
+              </label>
+              <label class="settings-field">
+                <span>地址</span>
+                <input id="setNeo4jUri" value="bolt://localhost:7687">
+              </label>
+              <label class="settings-field">
+                <span>账号</span>
+                <input id="setNeo4jUser" value="neo4j">
+              </label>
+              <label class="settings-field">
+                <span>密码</span>
+                <input id="setNeo4jPassword" type="password">
+              </label>
+              <label class="settings-field">
+                <span>数据库</span>
+                <input id="setNeo4jDatabase" value="neo4j">
+              </label>
+            </div>
+            <div class="settings-actions">
+              <button class="btn" id="testNeo4j">测试连接</button>
+              <p class="settings-hint" id="neo4jTestResult"></p>
+            </div>
+          </section>
+
+          <section class="settings-group" id="settings-storage">
+            <div class="settings-group-head">
+              <span class="settings-group-icon">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+              </span>
+              <div>
+                <h3>访问与存储</h3>
+                <p>设置本地访问密码，并查看当前数据存储位置。</p>
+              </div>
+            </div>
+            <div class="settings-fields">
+              <label class="settings-toggle">
+                <input type="checkbox" id="setRequirePassword">
+                <span>开启访问密码（默认免登录）</span>
+              </label>
+              <label class="settings-field wide">
+                <span>密码</span>
+                <input id="setPassword" type="password" placeholder="留空不修改">
+              </label>
+              <div class="settings-data-dir wide">
+                <span class="settings-field-label">数据目录</span>
+                <code id="setDataDir"></code>
+              </div>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   </section>
@@ -278,7 +413,7 @@
 var _t = localStorage.getItem("kb_token");
 if (!_t) { window.location.href = "/login"; }
 </script>
-  <script src="/static/js/app.js?v=80"></script>
+  <script src="/static/js/app.js?v=81"></script>
 </body>
 </html>
 
