@@ -173,10 +173,15 @@ async def test_embedding():
 
 
 @router.post("/test/neo4j")
-async def test_neo4j(uri: str = "bolt://localhost:7687", user: str = "neo4j", password: str = ""):
+async def test_neo4j(uri: str = "", user: str = "", password: str = ""):
     """测试 Neo4j 连接。"""
     try:
         from neo4j import GraphDatabase
+        s = get_settings()
+        uri = uri or s.neo4j_uri
+        user = user or s.neo4j_user
+        if password in ("", "***"):
+            password = s.neo4j_password
         driver = GraphDatabase.driver(uri, auth=(user, password))
         driver.verify_connectivity()
         driver.close()

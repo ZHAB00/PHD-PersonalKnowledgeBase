@@ -4,6 +4,7 @@ OCR 服务，用于处理扫描件 PDF（图片型文档）
 """
 from __future__ import annotations
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from PIL import Image
@@ -14,10 +15,46 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _bundled_tesseract(exe_dir: Path | None = None) -> Path | None:
+    """返回随安装包分发的小型 Tesseract 可执行文件路径。"""
+    candidates: list[Path] = []
+    if exe_dir is None:
+        root = Path(__file__).resolve().parents[2]
+        candidates.append(root / "packaging" / "resources" / "tesseract" / "tesseract.exe")
+        if getattr(sys, "frozen", False):
+            exe_dir = Path(sys.executable).resolve().parent
+            candidates.extend([
+                exe_dir / "tesseract" / "tesseract.exe",
+                exe_dir.parent / "tesseract" / "tesseract.exe",
+            ])
+    else:
+        candidates.extend([
+            exe_dir / "tesseract" / "tesseract.exe",
+            exe_dir.parent / "tesseract" / "tesseract.exe",
+        ])
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _tesseract_cmd() -> str:
+    bundled = _bundled_tesseract()
+    return str(bundled) if bundled else settings.tesseract_cmd
+
+
+def _bundled_tessdata(cmd: str) -> Path | None:
+    cmd_path = Path(cmd)
+    tessdata = cmd_path.parent / "tessdata"
+    if cmd_path.name.lower() == "tesseract.exe" and tessdata.is_dir():
+        return tessdata
+    return None
+
+
 def is_tesseract_available() -> bool:
     try:
         subprocess.run(
-            [settings.tesseract_cmd, "--version"],
+            [_tesseract_cmd(), "--version"],
             capture_output=True, timeout=5
         )
         return True
@@ -36,8 +73,13 @@ def ocr_image(image: Image.Image, lang: str | None = None) -> str:
         tmp_path = tmp.name
 
     try:
+        cmd = _tesseract_cmd()
+        args = [cmd, tmp_path, "stdout", "-l", lang, "--psm", "6"]
+        tessdata = _bundled_tessdata(cmd)
+        if tessdata:
+            args += ["--tessdata-dir", str(tessdata)]
         result = subprocess.run(
-            [settings.tesseract_cmd, tmp_path, "stdout", "-l", lang, "--psm", "6"],
+            args,
             capture_output=True, text=True, timeout=60
         )
         text = result.stdout.strip()

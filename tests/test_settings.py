@@ -120,6 +120,57 @@ async def test_settings_status_endpoint(client):
     assert "bundled_model" in data
 
 
+def test_bundled_tesseract_path_and_tessdata(tmp_path):
+    from app.core.ocr import _bundled_tesseract, _bundled_tessdata
+
+    exe = tmp_path / "tesseract" / "tesseract.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"tesseract")
+    tessdata = exe.parent / "tessdata"
+    tessdata.mkdir()
+
+    assert _bundled_tesseract(exe_dir=tmp_path) == exe
+    assert _bundled_tessdata(str(exe)) == tessdata
+
+
+@pytest.mark.asyncio
+async def test_neo4j_test_uses_stored_masked_password(monkeypatch):
+    from app.api import settings as settings_api
+    import neo4j
+
+    seen = {}
+
+    class FakeDriver:
+        def verify_connectivity(self):
+            return None
+
+        def close(self):
+            return None
+
+    def fake_driver(uri, auth=None, **kwargs):
+        seen["uri"] = uri
+        seen["auth"] = auth
+        return FakeDriver()
+
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", fake_driver)
+    monkeypatch.setattr(
+        settings_api,
+        "get_settings",
+        lambda: UserSettings(
+            neo4j_enabled=True,
+            neo4j_uri="bolt://127.0.0.1:7687",
+            neo4j_user="neo4j",
+            neo4j_password="stored-secret",
+            neo4j_database="neo4j",
+        ),
+    )
+
+    result = await settings_api.test_neo4j(uri="", user="", password="***")
+    assert result == {"ok": True}
+    assert seen["uri"] == "bolt://127.0.0.1:7687"
+    assert seen["auth"] == ("neo4j", "stored-secret")
+
+
 @pytest.mark.asyncio
 async def test_settings_rejects_invalid_port(client):
     payload = {

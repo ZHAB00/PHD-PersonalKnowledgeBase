@@ -6,7 +6,7 @@ PDH-PKG 是一个面向个人电脑的本地知识库系统。上传 PDF、Word�
 
 ## 核心特性
 
-- 文档解析：PDF（含图片型 PDF OCR）、DOCX、MD、TXT
+- 文档解析：PDF（含图片型 PDF OCR，安装包内置 Tesseract）、DOCX、MD、TXT
 - 分块入库：自动分块、向量化、写入 Qdrant
 - 混合检索：向量语义检索 + BM25 关键词检索 + RRF 融合
 - Agent 工具调用：知识库检索、文档统计、长期记忆、联网搜索
@@ -76,6 +76,8 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 
 浏览器打开 `http://127.0.0.1:8001`。首次访问会自动获取本地令牌，并弹出首次启动引导，选择对话与向量模型；之后随时可在“设置”页修改、测试连接，上传文档后即可提问。
 
+> 正式安装包已内置 Tesseract OCR 与 Qdrant。源码方式启动时，若需要识别扫描版 PDF，请自行安装 Tesseract 并确保 `tesseract` 在系统 PATH 中。
+
 Qdrant：从 Qdrant Release 下载 `qdrant-x86_64-pc-windows-msvc.zip`，解压后将 `qdrant.exe` 放到项目根目录的 `qdrant/` 文件夹，后端启动时会自动拉起。
 
 ## 服务说明
@@ -105,6 +107,8 @@ Qdrant：从 Qdrant Release 下载 `qdrant-x86_64-pc-windows-msvc.zip`，解压�
 | `PRESET_USERS` | 账号密码列表，对外开放前必须修改 |
 | `JWT_SECRET_KEY` | JWT 密钥，对外开放前必须修改 |
 | `DATA_DIR` | 数据目录，默认 `./data` |
+| `TESSERACT_CMD` | OCR 可执行文件；打包版自动使用内置目录，源码调试默认 `tesseract` |
+| `OCR_LANG` | OCR 语言，默认 `chi_sim+eng` |
 
 ### 向量化模型
 
@@ -199,6 +203,10 @@ landing/            落地页
 ### 是否需要 Neo4j
 
 不需要。向量检索、对话、联网搜索、长期记忆都独立于 Neo4j；只有知识图谱页面和“图谱增强检索”需要 Neo4j。
+
+### 扫描版 PDF 提示“未检测到 Tesseract OCR”
+
+安装包已内置 Tesseract，正常安装后无需处理。源码方式启动时需自行安装 Tesseract，或通过 `.env` 的 `TESSERACT_CMD` 指定可执行文件路径。
 
 ## 相关文档
 
