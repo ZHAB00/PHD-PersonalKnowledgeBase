@@ -316,3 +316,124 @@ app/templates/index.html — #view-graph 区块
 
 *报告时间: 2026-08-02*
 *关联文件: app/static/js/app.js, app/static/css/style.css, app/templates/index.html*
+
+---
+
+## Bug 9: GraphRAG 关系写入缺少 src/tgt 参数
+
+### 影响
+`store_entities_relations()` 写入关系时，Cypher 使用 `$src/$tgt` 但未传参，Neo4j 报 `Expected parameter(s): src, tgt`，关系无法入库。
+
+### 修复
+`session.run()` 补充 `src=src, tgt=tgt` 参数。
+
+### 代码位置
+app/rag/graph_rag.py — store_entities_relations()
+
+---
+
+## Bug 10: GraphRAG 检索 session.run query 参数冲突
+
+### 影响
+`retrieve_graph_evidence()` 把用户查询放进 `params["query"]`，又与 `session.run(query, **params)` 的位置参数 `query` 冲突，报 `Session.run() got multiple values for argument 'query'`，图谱检索直接失效。
+
+### 修复
+Cypher 参数改为 `$user_query`，params 使用 `user_query=query`。
+
+### 代码位置
+app/rag/graph_rag.py — retrieve_graph_evidence()
+
+---
+
+## Bug 11: DeepSeek thinking 模式 reasoning_content 未完整回传
+
+### 影响
+带 `tools` 的请求中，后续工具轮次的 assistant 消息如果没携带完整 `reasoning_content`，DeepSeek 返回 400：`The reasoning_content in the thinking mode must be passed back to the API.`
+
+### 修复
+`agent_loop_stream()` 维护 `pending_reasoning`，每个携带 `tool_calls` 的 assistant 消息都回传当前轮/历史的非空 `reasoning_content`；`_agent_loop()` 同步处理。
+
+### 代码位置
+app/rag/agent_loop.py、app/rag/graph.py
+
+
+---
+
+## Bug 12: async 聊天链路同步阻塞事件循环，导致发送消息后页面卡死
+
+### 影响
+聊天流、标题生成、设置测试等 async 路径使用同步 OpenAI 客户端，模型请求期间事件循环被阻塞，
+其他请求（/health、历史记录、前端轮询）全部超时，前端表现为“发完消息直接卡死”。
+
+### 修复
+1. 聊天、标题生成、设置测试改为 AsyncOpenAI，流式响应使用 async for。
+2. 记忆读写、图谱证据检索、doc_stats 改为 asyncio.to_thread，避免向量、Qdrant、Neo4j 同步调用阻塞事件循环。
+3. 源码调试模式默认改为 DeepSeek + Ollama，避免未打包的内置 ONNX 模型首次下载导致长时间无响应。
+
+### 代码位置
+app/rag/agent_loop.py、app/rag/graph.py、app/rag/memory.py、app/rag/tools.py、app/api/chat.py、app/api/settings.py、app/core/user_settings.py
+
+---
+
+## Bug 13: 本地令牌响应声称 admin，但 JWT 实际是 user，导致删除/新建知识库 403
+
+### 影响
+`/api/auth/local-token` 和 `/api/auth/login-local` 返回 `role: admin`，
+但 `create_access_token("local", "local")` 生成的角色是 `user`。
+前端用该令牌调用删除/新建知识库等管理员接口时返回 403，并且旧前端静默吞错，表现为“默认知识库无法删除”。
+
+### 修复
+1. `create_access_token()` 增加可选 `role` 参数，显式传 `admin` 时覆盖预设角色。
+2. 本地令牌接口改为 `create_access_token("local", "local", role="admin")`。
+3. 前端删除知识库失败时显示后端错误，不再静默无反应；旧 user 令牌会在页面加载时自动升级为本地 admin 令牌。
+
+### 代码位置
+app/core/auth.py、app/api/auth.py、app/static/js/app.js、tests/test_security.py
+---
+
+## Bug 14: 工具明明执行成功却显示“执行失败”图标
+
+### 影响
+search_knowledge_base 等工具正常返回 RAG 片段和知识图谱证据时，前端把结果气泡渲染成红色警告“执行失败”。原因是成功/失败判断对结果正文做关键词匹配，检索内容只要包含“错误/失败/error”就被误判为失败。
+
+### 修复
+1. 新增 tool_result_status()，只根据结构化 JSON 判断：顶层 status=error 或存在 error 字段才算失败，正文关键词不再参与判断。
+2. 流式 __TOOL_RESULT__ 事件显式携带 status 字段；历史记录重建工具事件时也使用结构化判断。
+3. 前端 isToolResultError() 改为解析结果 JSON 结构，不再对结果文本做正则匹配。
+
+### 代码位置
+app/rag/tools.py、app/rag/agent_loop.py、app/rag/graph.py、app/static/js/app.js、tests/test_reliability.py
+
+---
+
+## Bug 15: 嵌入模型维度与向量索引不一致导致文档检索全部落空
+
+### 影响
+agent_eval 门禁在非调试模式下用 512 维本地嵌入（BAAI/bge-small-zh-v1.5）查询现有 2560 维 Qdrant 索引，向量检索返回 0 条，回答只剩知识图谱/联网来源；记忆库也报 2560 vs 512 维度不匹配。
+
+### 修复
+1. 新增 `check_embedding_consistency()`，启动与 `search_knowledge_base` 都会检测索引维度，不一致时明确报错而不是静默返回空检索。
+2. `agent_eval run` 增加 `--debug`，源码评测默认可与 2560 维调试数据保持一致。
+3. 图谱证据补全来源文档标注：Chunk 写入 filename，检索时按 doc_id 回退映射，前端/评测可恢复文档级 Hit@k/MRR。
+
+### 代码位置
+app/core/vector_store.py、app/rag/tools.py、app/rag/graph_rag.py、app/rag/retriever.py、app/workers/ingestion.py、agent_eval/cli.py、agent_eval/README.md、tests/test_reliability.py
+
+---
+
+## Bug 16: 效率短板与 q21/q22 细节问题
+
+### 影响
+门禁综合分 0.9203，但 D3 效率只有 0.547；q21 首轮漏掉 Agent 六部分中的“执行/反思”，q22 有一次轻微虚构图谱实体描述。
+
+### 修复
+1. `retrieve()` 增加 5 分钟本地检索缓存，相同问题第二次直接复用，避免重复向量化/图谱检索。
+2. `search_knowledge_base` 工具链路关闭 HyDE 额外 LLM 调用，保留 MMR 与 4 倍召回不变，避免影响其他指标。
+3. 单条检索结果送入模型的长度从 300 字提升到 800 字，避免长分块后半段被截断。
+4. MMR 的文档/查询向量增加短缓存，同一分块被不同问题反复召回时不再重复嵌入。
+5. 同一轮多个工具调用改为并行执行，缩短工具轮时延。
+6. 系统提示词新增规则：清单类问题必须列全；图谱证据未明确给出的实体描述不得自行补写。
+7. 非调试模式默认嵌入改为 Ollama qwen3-embedding:4b（2560 维），与现有 Qdrant 索引一致；`.env.example` 同步更新。
+
+### 代码位置
+app/rag/retriever.py、app/rag/tools.py、app/rag/memory.py、app/rag/reranker.py、app/rag/graph.py、app/rag/agent_loop.py、app/prompts/__init__.py、app/core/user_settings.py、.env.example、tests/test_reliability.py

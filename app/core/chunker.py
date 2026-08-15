@@ -1,16 +1,16 @@
-"""Chunking strategy v4: structural + parent-child with full parent content + adaptive sizing
+"""分块策略 v4：结构化 + 父子分块 + 自适应尺寸
 
-References (RAG Best Practices Section 3):
-  3.2 Recursive character splitting (retained as fallback)
-  3.4 Structural chunking by Markdown headers (core strategy)
-  3.6 Adaptive chunk_size per document type
-  3.7 Parent-child chunking: small child for retrieval, large parent for LLM context
+参考（RAG 最佳实践第 3 节）：
+  3.2 递归字符切分（保留为回退方案）
+  3.4 按 Markdown 标题结构化分块（核心策略）
+  3.6 按文档类型自适应分块尺寸
+  3.7 父子分块：小子块用于检索，大父块用于 LLM 上下文
 
-Parent-child design:
-  - Child chunk = small precise segment (used for vector embedding & retrieval)
-  - Parent chunk = larger context window containing the child (used for LLM prompt)
-  - Both stored in Qdrant with parent_id linking
-  - At retrieval time: hit a child -> expand to its parent content for richer context
+父子分块设计：
+  - 子块 = 小且精确的片段（用于向量化与检索）
+  - 父块 = 包含子块的更大上下文窗口（用于 LLM 提示词）
+  - 两者都存入 Qdrant，通过 parent_id 关联
+  - 检索命中子块后展开父块内容以获得更丰富的上下文
 """
 from __future__ import annotations
 import re
@@ -22,7 +22,7 @@ from langchain_text_splitters import (
 
 from app.models.document import ChunkMetadata, DocumentChunk, ParseResult
 
-# Default chunking config per file type
+# 各文件类型的默认分块配置
 CHUNK_CONFIG = {
     ".pdf":  {"chunk_size": 800, "chunk_overlap": 150, "parent_multiplier": 3},
     ".docx": {"chunk_size": 800, "chunk_overlap": 150, "parent_multiplier": 3},
@@ -30,7 +30,7 @@ CHUNK_CONFIG = {
     ".txt":  {"chunk_size": 500, "chunk_overlap": 80,  "parent_multiplier": 2},
 }
 
-# Page marker pattern (Chinese: "Page N" or "Di N Ye")
+# 页码标记模式（中文："第 N 页" 或 "Di N Ye"）
 PAGE_MARKER = re.compile(r"\[\u7b2c (\d+) \u9875[^\]]*\]")
 
 
@@ -41,7 +41,7 @@ def build_chunks(
     tenant_id: str = "default",
     chunk_size: int = 800,
     chunk_overlap: int = 150,
-    enable_parent_child: bool = True,
+    enable_parent_child: bool = False,
 ) -> list[DocumentChunk]:
     ext = _get_ext(filename)
     cfg = CHUNK_CONFIG.get(ext, CHUNK_CONFIG[".txt"])
@@ -74,7 +74,7 @@ def build_chunks(
         c.metadata.chunk_index = i
         c.metadata.tenant_id = tenant_id
 
-    # Parent-child: build parent chunks that contain wider context
+    # 父子分块：构建包含更广上下文的父块
     if enable_parent_child and chunks:
         chunks = _build_parent_child_chunks(chunks, parent_multiplier)
 
@@ -85,14 +85,14 @@ def _build_parent_child_chunks(
     chunks: list[DocumentChunk],
     parent_multiplier: int,
 ) -> list[DocumentChunk]:
-    """Build parent-child hierarchy: each child gets a parent_id linking to a larger context window.
+    """构建父子层级：每个子块通过 parent_id 关联更大的上下文窗口。
 
-    Strategy: group consecutive child chunks into parent windows of size parent_multiplier.
-    Parent content = concatenation of all children in the window.
-    Each child stores parent_id; parent chunks are also stored (marked as is_parent=True)
-    so they can be looked up at retrieval time by ID.
+    策略：按 parent_multiplier 大小将连续子块分组成父窗口。
+    父块内容 = 窗口内所有子块拼接。
+    每个子块保存 parent_id；父块也一并存储（标记 is_parent=True），
+    以便检索时按 ID 查询。
 
-    Returns: original child chunks (now with parent_id set) + parent chunks appended.
+    返回：原始子块（已设置 parent_id）+ 追加的父块。
     """
     if len(chunks) <= 1:
         for c in chunks:
@@ -101,7 +101,7 @@ def _build_parent_child_chunks(
 
     window_size = max(2, parent_multiplier)
     total = len(chunks)
-    all_chunks = list(chunks)  # start with children
+    all_chunks = list(chunks)  # 先放入子块
     parent_start_index = len(all_chunks)
 
     for window_start in range(0, total, window_size):
@@ -109,7 +109,7 @@ def _build_parent_child_chunks(
         window_children = chunks[window_start:window_end]
         parent_id = f"parent_{window_start}"
 
-        # Parent content: all children concatenated with section breaks
+        # 父块内容：所有子块以分隔线拼接
         parent_content_parts = []
         parent_page = window_children[0].metadata.page_number
         for wc in window_children:
@@ -117,11 +117,11 @@ def _build_parent_child_chunks(
 
         parent_content = "\n\n---\n\n".join(parent_content_parts)
 
-        # Tag each child with parent_id
+        # 为每个子块标记 parent_id
         for wc in window_children:
             wc.metadata.parent_id = parent_id
 
-        # Create a parent chunk (stored for lookup, not for vector search)
+        # 创建父块（用于查询，不参与向量检索）
         parent_chunk = DocumentChunk(
             content=parent_content,
             metadata=ChunkMetadata(

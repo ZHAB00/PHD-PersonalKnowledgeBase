@@ -1,17 +1,20 @@
-"""Memory system v2: 4-layer architecture per Agent Memory Best Practices
+"""记忆系统 v2：按智能体记忆最佳实践的四层架构
 
-Layers:
-  1. Short-term: Token-budgeted sliding window (Section 2)
-  2. Long-term: Vector-based persistent memory with importance scoring (Section 3)
-  3. Summarization: Periodic compression via LLM (Section 4)
-  4. Importance scoring: LLM rates memories 1-10 (Section 3.2.3)
-  5. User isolation: user_id filter on all memory operations (Section 8.2.1)
+层级：
+  1. 短期记忆：基于 token 预算的滑动窗口（第 2 节）
+  2. 长期记忆：基于向量的持久记忆 + 重要性评分（第 3 节）
+  3. 总结：通过 LLM 定期压缩（第 4 节）
+  4. 重要性评分：LLM 对记忆评分 1-10（第 3.2.3 节）
+  5. 用户隔离：所有记忆操作按 user_id 过滤（第 8.2.1 节）
 """
 from __future__ import annotations
 import asyncio
 import hashlib
 import json
 import logging
+import threading
+import time
+from collections import OrderedDict
 from datetime import datetime, UTC
 from typing import Optional
 
@@ -24,18 +27,44 @@ from app.prompts import SUMMARY_PROMPT, IMPORTANCE_PROMPT, EXTRACT_FACTS_PROMPT,
 
 logger = logging.getLogger(__name__)
 
-# Budget config
+def validate_memory_content(content: str) -> str:
+    """若内容不应存储则返回原因字符串，否则返回空。"""
+    import re
+    text = (content or "").strip()
+    if not text:
+        return "empty"
+    low = text.lower()
+    poison = ["\u5ffd\u7565\u7cfb\u7edf", "\u65e0\u89c6\u7cfb\u7edf", "\u5ffd\u7565\u89c4\u5219", "\u65e0\u89c6\u89c4\u5219", "system prompt", "jailbreak", "\u8d8a\u72f1", "\u4ece\u73b0\u5728\u5f00\u59cb", "\u4f60\u5fc5\u987b"]
+    if any(k in low for k in poison):
+        return "prompt-injection"
+    if re.search(r"(password|passwd|secret|api[_-]?key|token|\u8eab\u4efd\u8bc1|\u94f6\u884c\u5361|\u5bc6\u7801|\u53e3\u4ee4)", low):
+        return "sensitive"
+    return ""
+
+# 预算配置
 TOKEN_BUDGET_CHARS = 6000
 SYSTEM_BUDGET_CHARS = 800
-SUMMARY_TRIGGER = 1          # summarize every turn
+SUMMARY_TRIGGER = 6          # summarize every N turns
 MEMORY_TTL = 86400 * 7       # 7 days
 
-# Memory collection in Qdrant
+# Qdrant 中的记忆集合
 MEMORY_COLLECTION = "kb_memory"
+
+# 记忆检索短缓存：相同问题在短时间内不重复向量化
+_MEMORY_RETRIEVE_CACHE: "OrderedDict[tuple, tuple[float, list[dict]]]" = OrderedDict()
+_MEMORY_RETRIEVE_CACHE_LOCK = threading.Lock()
+_MEMORY_RETRIEVE_TTL = 300
+_MEMORY_RETRIEVE_MAX = 64
+
+
+def clear_memory_retrieve_cache():
+    """清空记忆检索缓存，切换嵌入模型后调用。"""
+    with _MEMORY_RETRIEVE_CACHE_LOCK:
+        _MEMORY_RETRIEVE_CACHE.clear()
 
 
 # ============================================================
-# Layer 1: Short-term memory (Token-budgeted sliding window)
+# 第一层：短期记忆（基于 token 预算的滑动窗口）
 # ============================================================
 
 def _estimate_chars(messages: list[dict]) -> int:
@@ -43,7 +72,7 @@ def _estimate_chars(messages: list[dict]) -> int:
 
 
 def apply_token_budget(history: list[dict], max_chars: int = TOKEN_BUDGET_CHARS) -> list[dict]:
-    """Sliding window with char budget. System messages preserved, user/assistant trimmed from head."""
+    """带字符预算的滑动窗口。保留系统消息，从头部裁剪用户/助手消息。"""
     system_msgs = [m for m in history if m.get("role") == "system"]
     other_msgs = [m for m in history if m.get("role") != "system"]
 
@@ -65,7 +94,7 @@ def apply_token_budget(history: list[dict], max_chars: int = TOKEN_BUDGET_CHARS)
 
 
 # ============================================================
-# Layer 2: Long-term memory (vector store + user isolation)
+# 第二层：长期记忆（向量存储 + 用户隔离）
 # ============================================================
 
 def _memory_collection_name() -> str:
@@ -79,6 +108,7 @@ def _ensure_memory_collection():
     if _memory_collection_ready:
         return
     from app.core.vector_store import _get_client
+    from app.core.embedding import embedding_dimension
     from qdrant_client.http import models
     client = _get_client()
     col_name = _memory_collection_name()
@@ -86,11 +116,39 @@ def _ensure_memory_collection():
     if col_name not in existing:
         client.create_collection(
             collection_name=col_name,
-            vectors_config=models.VectorParams(size=settings.embedding_dim, distance=models.Distance.COSINE),
+            vectors_config=models.VectorParams(size=embedding_dimension(), distance=models.Distance.COSINE),
         )
         client.create_payload_index(collection_name=col_name, field_name="user_id", field_schema=models.PayloadSchemaType.KEYWORD)
         client.create_payload_index(collection_name=col_name, field_name="memory_type", field_schema=models.PayloadSchemaType.KEYWORD)
         logger.info(f"Created memory collection: {col_name}")
+    else:
+        try:
+            info = client.get_collection(col_name)
+            vectors = info.config.params.vectors
+            current_dim = None
+            if isinstance(vectors, dict):
+                for v in vectors.values():
+                    if hasattr(v, "size"):
+                        current_dim = v.size
+                        break
+            else:
+                current_dim = getattr(vectors, "size", None)
+            expected_dim = embedding_dimension()
+            if current_dim and current_dim != expected_dim:
+                if info.points_count == 0:
+                    client.delete_collection(col_name)
+                    client.create_collection(
+                        collection_name=col_name,
+                        vectors_config=models.VectorParams(size=expected_dim, distance=models.Distance.COSINE),
+                    )
+                    logger.info(f"Recreated memory collection: {col_name}")
+                else:
+                    logger.warning(
+                        "Memory collection dimension mismatch (%s != %s); existing memories may be incompatible",
+                        current_dim, expected_dim,
+                    )
+        except Exception as e:
+            logger.warning("Failed to validate memory collection: %s", e)
     _memory_collection_ready = True
 
 
@@ -101,64 +159,70 @@ async def store_long_term_memory(
     importance: int = 5,
     session_id: str = "",
 ):
-    """Store a memory fragment with dedup: update existing similar memory instead of duplicating."""
-    from app.core.embedding import embed_text
-    from app.core.vector_store import _get_client
-    from qdrant_client.http import models
-    from uuid import uuid4
+    """Store a memory fragment and deduplicate similar ones."""
+    def _store_sync():
+        from app.core.embedding import embed_text
+        from app.core.vector_store import _get_client
+        from qdrant_client.http import models
+        from uuid import uuid4
+        from datetime import datetime, UTC
 
-    try:
-        _ensure_memory_collection()
-        content_trimmed = content[:2000]
-        vector = embed_text(content_trimmed)
-        client = _get_client()
+        try:
+            reason = validate_memory_content(content)
+            if reason:
+                logger.info(f"Memory skipped ({reason}): {str(content)[:50]}")
+                return
+            _ensure_memory_collection()
+            content_trimmed = content[:2000]
+            vector = embed_text(content_trimmed)
+            client = _get_client()
 
-        # Check for near-duplicate (same user, similar content)
-        existing = client.query_points(
-            collection_name=_memory_collection_name(),
-            query=vector,
-            limit=1,
-            query_filter=models.Filter(must=[
-                models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))
-            ]),
-            with_payload=True,
-            score_threshold=0.92,
-        )
-        if existing.points:
-            # Update existing memory instead of creating duplicate
-            pt = existing.points[0]
-            old_imp = pt.payload.get("importance", 5)
-            new_imp = max(old_imp, importance)  # keep highest importance
-            client.set_payload(
+            existing = client.query_points(
                 collection_name=_memory_collection_name(),
-                points=[pt.id],
-                payload={
-                    "content": content_trimmed,
-                    "importance": new_imp,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                },
+                query=vector,
+                limit=1,
+                query_filter=models.Filter(must=[
+                    models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))
+                ]),
+                with_payload=True,
+                score_threshold=0.92,
             )
-            logger.debug(f"Memory updated (dedup): {content[:60]}... importance {old_imp}->{new_imp}")
-            return
+            if existing.points:
+                pt = existing.points[0]
+                old_imp = pt.payload.get("importance", 5)
+                new_imp = max(old_imp, importance)
+                client.set_payload(
+                    collection_name=_memory_collection_name(),
+                    points=[pt.id],
+                    payload={
+                        "content": content_trimmed,
+                        "importance": new_imp,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    },
+                )
+                logger.debug(f"Memory updated (dedup): {content[:60]}... importance {old_imp}->{new_imp}")
+                return
 
-        client.upsert(
-            collection_name=_memory_collection_name(),
-            points=[models.PointStruct(
-                id=str(uuid4()),
-                vector=vector,
-                payload={
-                    "user_id": user_id,
-                    "session_id": session_id,
-                    "memory_type": memory_type,
-                    "content": content_trimmed,
-                    "importance": importance,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                },
-            )],
-        )
-        logger.debug(f"Memory stored [{memory_type}][importance={importance}]: {content[:60]}...")
-    except Exception as e:
-        logger.warning(f"Failed to store memory: {e}")
+            client.upsert(
+                collection_name=_memory_collection_name(),
+                points=[models.PointStruct(
+                    id=str(uuid4()),
+                    vector=vector,
+                    payload={
+                        "user_id": user_id,
+                        "session_id": session_id,
+                        "memory_type": memory_type,
+                        "content": content_trimmed,
+                        "importance": importance,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    },
+                )],
+            )
+            logger.debug(f"Memory stored [{memory_type}][importance={importance}]: {content[:60]}...")
+        except Exception as e:
+            logger.warning(f"Failed to store memory: {e}")
+
+    return await asyncio.to_thread(_store_sync)
 
 
 async def retrieve_long_term_memory(
@@ -166,72 +230,86 @@ async def retrieve_long_term_memory(
     user_id: str = "default",
     top_k: int = 5,
 ) -> list[dict]:
-    """Retrieve relevant memories with multi-factor scoring (semantic + recency + importance)."""
-    from app.core.embedding import embed_text
-    from app.core.vector_store import _get_client
-    from qdrant_client.http import models
-    from datetime import datetime, UTC
+    """Retrieve memories ranked by semantic and recency importance."""
+    def _retrieve_sync():
+        from app.core.embedding import embed_text
+        from app.core.vector_store import _get_client
+        from qdrant_client.http import models
+        from datetime import datetime, UTC
 
-    try:
-        _ensure_memory_collection()
-        vector = embed_text(query)
-        client = _get_client()
+        try:
+            _ensure_memory_collection()
+            vector = embed_text(query)
+            client = _get_client()
 
-        result = client.query_points(
-            collection_name=_memory_collection_name(),
-            query=vector,
-            limit=top_k * 3,
-            query_filter=models.Filter(must=[
-                models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id)),
-            ]),
-            with_payload=True,
-            score_threshold=0.4,
-        )
+            result = client.query_points(
+                collection_name=_memory_collection_name(),
+                query=vector,
+                limit=top_k * 3,
+                query_filter=models.Filter(must=[
+                    models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id)),
+                ]),
+                with_payload=True,
+                score_threshold=0.4,
+            )
 
-        now = datetime.now(UTC)
-        memories = []
-        for r in result.points:
-            ts_str = r.payload.get("timestamp", "")
-            imp = r.payload.get("importance", 5)
-            sim_score = r.score
+            now = datetime.now(UTC)
+            memories = []
+            for r in result.points:
+                ts_str = r.payload.get("timestamp", "")
+                imp = r.payload.get("importance", 5)
+                sim_score = r.score
 
-            # Time decay: half-life = 7 days
-            time_score = 1.0
-            if ts_str:
-                try:
-                    ts = datetime.fromisoformat(ts_str)
-                    age_days = (now - ts).total_seconds() / 86400
-                    time_score = 0.5 ** (age_days / 7)
-                except Exception:
-                    pass
+                time_score = 1.0
+                if ts_str:
+                    try:
+                        ts = datetime.fromisoformat(ts_str)
+                        age_days = (now - ts).total_seconds() / 86400
+                        time_score = 0.5 ** (age_days / 7)
+                    except Exception:
+                        pass
 
-            # Composite: 0.5 semantic + 0.25 recency + 0.25 importance
-            imp_norm = imp / 10.0
-            composite = 0.5 * sim_score + 0.25 * time_score + 0.25 * imp_norm
+                imp_norm = imp / 10.0
+                composite = 0.5 * sim_score + 0.25 * time_score + 0.25 * imp_norm
 
-            memories.append({
-                "content": r.payload.get("content", ""),
-                "memory_type": r.payload.get("memory_type", ""),
-                "importance": imp,
-                "timestamp": ts_str,
-                "score": round(composite, 4),
-            })
+                memories.append({
+                    "content": r.payload.get("content", ""),
+                    "memory_type": r.payload.get("memory_type", ""),
+                    "importance": imp,
+                    "timestamp": ts_str,
+                    "score": round(composite, 4),
+                })
 
-        memories.sort(key=lambda m: m["score"], reverse=True)
-        return memories[:top_k]
-    except Exception as e:
-        logger.warning(f"Memory retrieval failed: {e}")
-        return []
+            memories.sort(key=lambda m: m["score"], reverse=True)
+            return memories[:top_k]
+        except Exception as e:
+            logger.warning(f"Memory retrieval failed: {e}")
+            return []
+
+    cache_key = (query, user_id, top_k)
+    now = time.monotonic()
+    with _MEMORY_RETRIEVE_CACHE_LOCK:
+        hit = _MEMORY_RETRIEVE_CACHE.get(cache_key)
+        if hit and now - hit[0] <= _MEMORY_RETRIEVE_TTL:
+            return [dict(m) for m in hit[1]]
+
+    memories = await asyncio.to_thread(_retrieve_sync)
+
+    with _MEMORY_RETRIEVE_CACHE_LOCK:
+        _MEMORY_RETRIEVE_CACHE[cache_key] = (time.monotonic(), [dict(m) for m in memories])
+        while len(_MEMORY_RETRIEVE_CACHE) > _MEMORY_RETRIEVE_MAX:
+            _MEMORY_RETRIEVE_CACHE.popitem(last=False)
+    return memories
 
 
 # ============================================================
-# Layer 3: Session summarization (LLM compression)
+# 第三层：会话总结（LLM 压缩）
 # ============================================================
 
 
 
 async def summarize_conversation(history: list[dict], user_id: str = "default") -> str:
-    """Use LLM to compress conversation history into a summary."""
+    """使用 LLM 将对话历史压缩为摘要。"""
     client = OpenAI(
         base_url=settings.deepseek_base_url,
         api_key=settings.deepseek_api_key,
@@ -263,14 +341,14 @@ async def should_summarize(turn_count: int) -> bool:
 
 
 # ============================================================
-# Layer 4: Importance scoring (LLM rates memory)
+# 第四层：重要性评分（LLM 评估记忆）
 # ============================================================
 
-# (prompt moved to app.prompts)
+# （提示词已移至 app.prompts）
 
 
 async def score_importance(content: str) -> int:
-    """LLM rates the importance of a conversation fragment (1-10)."""
+    """LLM 对对话片段的重要性评分（1-10）。"""
     client = OpenAI(
         base_url=settings.deepseek_base_url,
         api_key=settings.deepseek_api_key,
@@ -295,14 +373,14 @@ async def score_importance(content: str) -> int:
 
 
 # ============================================================
-# Layer 5: Extract key facts from conversation
+# 第五层：从对话中抽取关键事实
 # ============================================================
 
-# (prompt moved to app.prompts)
+# （提示词已移至 app.prompts）
 
 
 async def extract_key_facts(history: list[dict]) -> list[dict]:
-    """Extract key user facts/preferences from conversation for long-term storage."""
+    """从对话中抽取用户关键事实/偏好，用于长期存储。"""
     client = OpenAI(
         base_url=settings.deepseek_base_url,
         api_key=settings.deepseek_api_key,
@@ -330,14 +408,14 @@ async def extract_key_facts(history: list[dict]) -> list[dict]:
 
 
 # ============================================================
-# Integration hook: inject memories into prompt
+# 集成钩子：将记忆注入提示词
 # ============================================================
 
-# (prompt moved to app.prompts)
+# （提示词已移至 app.prompts）
 
 
 def build_memory_context(memories: list[dict]) -> str:
-    """Format retrieved memories for prompt injection."""
+    """格式化检索到的记忆，用于注入提示词。"""
     if not memories:
         return ""
     lines = []

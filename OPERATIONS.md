@@ -1,8 +1,8 @@
-# 企业知识库搭建 — 操作手册
+# PDH-PKG — 操作手册
 
-> 最后更新：2026-07-08
-> 测试状态：33/33 passed
-> 当前版本状态：后端 33 测试全绿，所有模块导入正常，JS 语法检查通过（无 BOM）
+> 最后更新：2026-08-13
+> 测试状态：57 passed（另有 2 个 Neo4j 集成测试需本地 Neo4j 运行）
+> 当前版本状态：PDH-PKG 0.1.0 桌面应用，内置向量模型可选安装，打包与安装器已验证
 
 ---
 
@@ -34,7 +34,7 @@ http://localhost:8001/
 ### 运行测试
 
 `powershell
-E:\anaconda3\envs\enterprise_kb\python.exe -m pytest tests/ -v --tb=short
+python -m pytest tests/ -v --tb=short
 `
 
 ---
@@ -49,7 +49,7 @@ E:\anaconda3\envs\enterprise_kb\python.exe -m pytest tests/ -v --tb=short
 | pp/models/chat.py | ~50 | Pydantic 模型（ChatResponse, ToolCallEvent） |
 | **RAG 核心** | | |
 | pp/rag/graph.py | ~400 | 对话引擎：意图分类、agent loop、记忆集成 |
-| pp/rag/tools.py | ~250 | 工具框架 + 4个内置工具（权限隔离） |
+| pp/rag/tools.py | ~250 | 工具框架 + 4个内置工具（用户隔离） |
 | pp/rag/memory.py | ~350 | 四层记忆系统 |
 | pp/rag/retriever.py | — | 混合检索 + HyDE + 重排 |
 | pp/rag/prompts.py | — | 运行时 prompt 构建 |
@@ -69,12 +69,49 @@ E:\anaconda3\envs\enterprise_kb\python.exe -m pytest tests/ -v --tb=short
 
 ## 三、本轮改动记录
 
+### 2026-08-15 debug.ps1 优先使用当前 Conda 环境的 Python
+- **文件**：packaging/debug.ps1
+- **原因**：从 `(enterprise_kb)` 提示符运行 `packaging\debug.ps1` 时，脚本仍可能解析到 base/WindowsApps 的 `python`，导致 `No module named neo4j`。
+- **改动**：启动前先校验候选 Python 是否能导入 `neo4j` 和 `uvicorn`（校验用 try/catch 包裹，避免 stderr 触发 NativeCommandError）；选择顺序为 `PDH_PKG_PYTHON` -> `CONDA_PREFIX\python.exe` -> 本地 `enterprise_kb` 兜底路径 -> 全局 `python`，并打印实际选中的 Python 路径；`.ps1` 改为 UTF-8 BOM 编码避免中文乱码。
+
+### 2026-08-13 联网搜索工具（无需 API Key）
+- **文件**：app/rag/web_search.py、app/rag/tools.py、app/prompts/__init__.py、app/core/user_settings.py、app/api/settings.py、app/templates/index.html、app/static/js/app.js、app/static/css/style.css、tests/test_web_search.py
+- **改动**：
+  1. 新增 `web_search` 工具，支持 `auto / tavily / searxng / bing / duckduckgo`。
+  2. 默认 `auto` 无需 API Key：有 Tavily Key 用 Tavily；有 Base URL 用 SearXNG；否则用 Bing，失败自动切 DuckDuckGo。
+  3. Bing 跳转链接自动解码为真实 URL，并补齐浏览器请求头降低反爬拦截。
+  4. 系统提示词新增规则 8：web_search 结果必须逐条引用标题和 URL。
+  5. 设置页新增“联网搜索”组和“测试连接”；搜索 API Key 保存后脱敏回显。
+  6. 工具气泡支持 web_search 结果卡片展示。
+- **验证**：10 个联网搜索单元测试通过；真实 Bing 无 Key 搜索返回 3 条含真实 URL 的结果；全量测试 67 passed。
+
+### 2026-08-13 项目介绍页（landing）
+- **文件**：landing/index.html、landing/assets/screens/*.jpg、landing/assets/favicon.ico、favicon.ico、output/landing-preview-*.png（预览图）
+- **原因**：需要一个对外介绍界面，展示产品能力、真实界面、下载安装包与开源计划
+- **改动**：
+  - 新增浅色专业风单页介绍页，定位为个人知识库，含 Hero、产品能力、界面预览、3D 图谱设计、下载、GitHub 区块
+  - 用 Playwright 抓取应用真实界面（对话 / 文档 / 设置）作为视觉素材
+  - GitHub 地址留配置占位 `GITHUB_URL`，上传仓库后填入即自动点亮"查看源码"按钮
+  - 移除云服务器板块，不展示服务器 IP；导航左侧新增 GitHub 图标入口
+  - 新增四套配色切换（翡翠绿 / 靛蓝 / 黑金 / 珊瑚橙），支持 `?scheme=` 预览
+  - 修复桌面导航重复的"下载安装包"按钮；替换 favicon.ico 为知识图谱风格图标
+  - 导航与页脚 Logo 改用用户原版图标（packaging/resources/icon.ico 转 PNG），根目录 favicon.ico 与 landing favicon 均恢复为用户原版
+  - 本地已通过 Playwright 桌面 / 移动端及四套配色检查：无横向溢出、无坏图、无控制台错误
+
+### 2026-08-13 移除角色隔离
+- **文件**：app/core/auth.py、app/api/auth.py、app/api/kb.py、app/api/documents.py、app/api/graph_api.py、app/main.py、app/static/js/app.js、app/templates/index.html、app/templates/login.html、API_DOCS.md、启动说明.md、landing/index.html
+- **改动**：
+  1. 删除 get_admin_user 依赖，知识库/文档/图谱操作不再要求管理员角色。
+  2. JWT 和 /api/auth/me 不再返回 role 字段，前端不再维护 kb_role。
+  3. 文档页操作按钮始终显示，登录页不再写入角色。
+- **验证**：58 passed；local-token 实测新建并删除知识库无 403。
+
 ### 改动 1：修复 memory.py 冗余 SUMMARY_PROMPT
 - **文件**：pp/rag/memory.py
 - **改了什么**：删除第 231-243 行的硬编码 SUMMARY_PROMPT 定义。现在统一使用 pp/prompts/__init__.py 中导入的版本。
 - **验证**：Select-String -Path app/rag/memory.py -Pattern "SUMMARY_PROMPT" 只剩 2 处（导入 + 使用），没有重复定义。
 
-### 改动 2：工具 Schema 增强 + 权限隔离
+### 改动 2：工具 Schema 增强 + 用户隔离
 - **文件**：pp/rag/tools.py
 - **改了什么**：
   1. 每个工具的 description 补了反例（"不要用于..."），参考 04-工具调用.md §2.1
@@ -133,10 +170,10 @@ enderSessionList
 
 `powershell
 # 1. 确认当前测试全绿
-E:\anaconda3\envs\enterprise_kb\python.exe -m pytest tests/ -v --tb=short
+python -m pytest tests/ -v --tb=short
 
 # 2. 确认模块都能导入
-E:\anaconda3\envs\enterprise_kb\python.exe -c "
+python -c "
 for m in ['app.config','app.rag.graph','app.rag.tools','app.rag.memory','app.models.chat','app.prompts']:
     __import__(m); print('OK:', m)
 "
@@ -146,7 +183,7 @@ for m in ['app.config','app.rag.graph','app.rag.tools','app.rag.memory','app.mod
 
 `powershell
 # 3. 跑测试
-E:\anaconda3\envs\enterprise_kb\python.exe -m pytest tests/ -v --tb=short
+python -m pytest tests/ -v --tb=short
 
 # 4. 如果改过 JS，检查语法
 # 用 Node REPL 或打开浏览器 F12 看 console
@@ -462,15 +499,16 @@ egister_builtin_tools() 已无实际逻辑（tools 是模块级 @tool 装饰器�
 ### 具体改动
 
 #### 1. Neo4j 环境 (Java 21)
-- Neo4j 2026.05 Community 安装在 E:\neo4j-chs-community-2026.05.0-windows
-- 必须用 Java 21+ (D:\Program Files\Java\jdk-21), Java 17/8 不支持
-- 密码: neo4j/kb123456, 端口: bolt 7687, http 7474
-- 启动脚本: E:\neo4j-chs-community-2026.05.0-windows\start_neo4j.bat
+- Neo4j 2026.05 Community 安装在 <Neo4j安装目录>
+- 必须用 Java 21+ (<Java 21 安装目录>), Java 17/8 不支持
+- 密码: 按安装时配置, 端口: bolt 7687, http 7474
+- 启动脚本: <Neo4j安装目录>\start_neo4j.bat
 
 #### 2. graph_rag.py 核心模块
 - extract_entities_relations(): 用 DeepSeek LLM 从文档 chunk 抽取实体+关系
 - store_entities_relations(): 存入 Neo4j (Entity + RELATES_TO + Chunk)
-- etrieve_graph_evidence(): 按查询词匹配实体 -> 1-hop 邻居 -> 关联 chunk
+- 
+etrieve_graph_evidence(): 按查询词匹配实体 -> 1-hop 邻居 -> 关联 chunk
 - ormat_graph_evidence(): 格式化为可读上下文
 - ingest_chunk_to_graph(): per-chunk 异步入库钩子
 - delete_kb_graph() / graph_stats(): 清理/统计
@@ -543,3 +581,267 @@ egister_builtin_tools() 已无实际逻辑（tools 是模块级 @tool 装饰器�
 ### 测试结果
 - node --check app/static/js/app.js 通过
 - Playwright 真浏览器验证: 180 labels 全部可见、四套设计切换无 pageerror、页面无滚动溢出
+
+## 2026-08-04 - 提示词工程修复 + 前端工具气泡重构
+
+### 修改文件
+| 文件 | 改动 |
+|------|------|
+| app/prompts/__init__.py | SYSTEM_PROMPT 增加检索内容防注入边界；删除未使用的 REFUSAL_RESPONSE / NEEDS_RAG_PROMPT；记忆 JSON 提示词增加“只输出 JSON、不要代码块”约束 |
+| app/rag/prompts.py | 移除 REFUSAL_RESPONSE 引用 |
+| app/rag/graph.py | 移除历史重复注入（不再把历史同时拼进 user prompt 和 messages）；移除死提示词引用 |
+| app/rag/graph_rag.py | EXTRACTION_PROMPT 增加纯 JSON 约束；修复关系写入缺少 src/tgt 参数；修复检索 session.run query 参数冲突 |
+| app/rag/agent_loop.py | reasoning_content 整轮持续回传 |
+| app/models/chat.py | ToolCallEvent 增加 sources 字段，持久化来源引用 |
+| app/static/js/app.js | 每个工具调用独立气泡 + 展开/收起（含动画）；思考中指示；移除右侧来源面板；来源引用收进工具气泡；新建对话跳转；删除对话确认；默认知识库可删除并自动切换到剩余知识库 |
+| app/static/css/style.css | 工具气泡、展开动画、思考 spinner、气泡间距样式 |
+| app/core/kb_service.py | 允许删除默认知识库，但至少保留一个知识库 |
+
+### 测试结果
+- pytest tests/ -q --tb=short: 37 passed
+
+## 2026-08-05 - 安全/持久化复查修复 + 回归测试
+
+### 修改文件
+| 文件 | 改动 |
+|------|------|
+| app/api/documents.py | kb_id 白名单正则校验，文件名含路径分隔符/.. 直接拒绝，upload 先校验再建目录 |
+| app/core/kb_service.py | _load_kb_list_raw 从 kbs.json 恢复时同时写回 kb:{id}；get_kb 增加文件回退 |
+| app/rag/tools.py | search_knowledge_base 改用 asyncio.to_thread，避免 HyDE 阻塞事件循环 |
+| .gitignore | 追加 data/kbs.json |
+| tests/test_reliability.py | 新增 4 个回归测试：kb_id 穿越、文件名穿越、get_kb 文件回退、BM25 元数据保留 |
+
+### 测试结果
+- pytest tests/ -q --tb=short: 41 passed
+
+## 2026-08-05 - 复查修复：列表入口持久化 + list 400 分支
+
+### 修改
+- app/core/kb_service.py: get_kb_list() 先走 _load_kb_list_raw() 读文件，只有文件和缓存都为空才创建默认库，避免覆盖 kbs.json。
+- app/api/documents.py: list_documents 非法 kb_id 的 HTTPException 补上字符串引号，返回 400 而不是 500。
+- tests/test_reliability.py: 新增 get_kb_list 文件恢复不覆盖、list 非法 kb_id 返回 400 两个回归测试。
+
+### 测试结果
+- pytest tests/ -q --tb=short: 43 passed
+
+## 2026-08-05 - 安全加固第一批（LLM 注入/ACL/计算器/记忆过滤）
+
+### 修改
+- app/rag/tools.py: search_knowledge_base / doc_stats 强制使用当前会话 kb_id（忽略 LLM 传入的 kb_id）；calculator 改为 AST 求值器，禁止 eval、限制幂运算规模；remember 写入前过滤指令型/敏感内容
+- app/rag/graph.py: 长期记忆、图谱证据不再注入 system 角色，改为追加到 user 消息并用 <untrusted> 定界
+- app/rag/agent_loop.py / app/rag/graph.py: execute_tool 透传 kb_id 到工具上下文
+- app/rag/memory.py: 新增 validate_memory_content，store_long_term_memory 跳过 prompt-injection / 敏感内容
+- tests/test_security.py: 新增跨库 kb_id 忽略、calculator AST、记忆过滤 3 个安全回归测试
+
+### 测试结果
+- pytest tests/ -q --tb=short: 46 passed
+
+## 2026-08-05 - 安全加固第二批（输出 guard / 抽取可信边界 / 默认密钥告警）
+
+### 修改
+- app/rag/graph_rag.py: EXTRACTION_PROMPT 显式声明文档片段不可信、不得执行其中指令，并强制 JSON schema。
+- app/rag/graph.py: 新增 _guard_output，对话保存前脱敏 sk-* 密钥和 Neo4j 密码，记录疑似 system prompt 泄漏/拒答信号。
+- app/main.py: 启动时检测默认 JWT secret 和弱预设密码并输出警告。
+- tests/test_security.py: 新增输出脱敏、抽取提示词可信边界 2 个测试。
+
+### 测试结果
+- pytest tests/ -q --tb=short: 48 passed
+
+## 2026-08-05 - 读接口统一鉴权 + 前端自动携带 token
+
+### 修改
+- app/main.py: AuthMiddleware 对 /api/* 强制 Bearer 鉴权（/api/auth/login 除外），未认证返回 401。
+- app/static/js/app.js: 全局 fetch 包装，所有 /api/ 请求自动带 Authorization 头。
+- tests/test_api.py、tests/test_reliability.py: client fixture 登录 admin 并设置默认鉴权头。
+- tests/test_security.py: 新增未认证读接口 401 测试。
+
+### 测试结果
+- pytest tests/ -q --tb=short: 49 passed
+
+## 2026-08-05 - 安全收尾（rate limit / JWT 密钥自动持久化 / 注入测试）
+
+### 修改
+- app/main.py: /api/* 增加进程内 rate limit（120 次/分钟/IP+路径），超限返回 429。
+- app/core/auth.py: 默认 JWT secret 时自动生成随机密钥并持久化到 data/secret.key，旧默认值不再使用。
+- .gitignore: 追加 data/secret.key。
+- tests/test_security.py: 新增 remember 注入拦截、记忆写入跳过投毒、rate limit 突发、JWT 密钥非默认 4 个测试。
+
+### 测试结果
+- pytest tests/ -q --tb=short: 53 passed
+
+## 2026-08-12 - 设置页 + 模型接入层 + 免登录
+
+### 修改
+- 新增 app/core/user_settings.py：设置持久化到 data/settings.json，支持对话模型、向量化、Neo4j、访问密码。
+- 新增 app/api/settings.py：设置读取/保存/测试连接接口，密钥脱敏。
+- app/core/embedding.py：支持内置 ONNX（fastembed）、Ollama、OpenAI 兼容三种向量化方式，设置变更热切换。
+- app/rag/graph.py / agent_loop.py：聊天模型改为读取用户设置，支持 DeepSeek、OpenAI 兼容、Ollama、LM Studio。
+- app/api/auth.py：无密码模式下提供本机 local-token，默认免登录；可开启访问密码。
+- 前端新增“设置”视图与首次配置引导，包含对话/向量化/Neo4j/访问密码四组配置和测试按钮。
+- requirements.txt 增加 fastembed。
+
+### Review 修复
+- mask_settings 不再返回 password_hash；开启访问密码必须设置密码。
+- LM Studio 默认地址 http://localhost:1234/v1；测试聊天接口按需传 extra_body。
+- 设置保存后重置向量模型缓存，支持热切换。
+- local-token 仅允许本机获取，防止局域网无密码提权。
+
+### 测试结果
+- pytest tests/ -q --tb=short: 54 passed
+- 2 个 Neo4j 集成测试因 Neo4j 未启动失败，与本次改动无关
+
+## 2026-08-12 - 访问密码登录页适配
+
+### 修改
+- app/api/settings.py: 新增 /api/settings/public，登录页无需令牌即可判断是否启用访问密码。
+- app/api/auth.py: 新增 /api/auth/login-local，校验单密码后发放本地令牌。
+- app/main.py: 放行 login-local 与 settings/public。
+- app/templates/login.html: 无密码模式自动获取本地令牌免登录；开启密码时隐藏用户名，只输密码。
+- tests/test_settings.py: 新增单密码登录流程测试。
+
+### 测试结果
+- pytest tests/ -q --tb=short: 55 passed
+- 2 个 Neo4j 集成测试因 Neo4j 未启动失败，与本次改动无关
+
+## 2026-08-12 - 打包脚本（PyInstaller + Inno Setup 7）
+
+### 新增文件
+| 文件 | 作用 |
+|------|------|
+| packaging/run.py | PDH-PKG 启动器：设置 %LOCALAPPDATA%\PDH-PKG 数据目录、启动后端、自动打开浏览器 |
+| packaging/build.ps1 | 安装依赖、可选下载模型、PyInstaller 单目录打包、拷贝 Qdrant、调用 ISCC |
+| packaging/installer.iss | Inno Setup 7 安装器：x64、组件可选（内置模型 / Neo4j）、快捷方式、卸载保留/删除数据 |
+
+### 使用
+```powershell
+.\packaging\build.ps1 -Version 0.1.0 -BundleModel
+```
+- 不加 -BundleModel 则不下载模型，安装包更小，首次启动由用户在设置页选择下载。
+- 若已安装 Inno Setup 7，会自动找到 ISCC.exe；也可用 -ISCC 指定路径。
+- 输出：output/PDH-PKG-Setup-0.1.0.exe，便携版在 dist2/PDH-PKG/。
+
+### 构建验证
+- PyInstaller 打包成功，OpenSSL DLL 已随包携带，修复 _ssl 加载失败。
+- 打包版启动冒烟测试通过：/health 返回 200。
+- Neo4j 默认关闭：app/main.py 与 graph_rag 读取用户设置，未启用时不启动、不阻塞。
+- 当前机器使用本机安装的 Inno Setup 7 `ISCC.exe` 已成功生成安装器。
+
+## 2026-08-13 - 内置向量模型与打包收尾
+
+### 修改
+- packaging/build.ps1：构建统一输出到 dist2/PDH-PKG，固定使用项目 Conda Python；内置模型改为下载 Qdrant 的 ONNX 版 bge-small-zh-v1.5（HF 镜像，禁用 Xet）。
+- app/core/embedding.py：打包版优先加载 exe 同级或上级目录中的 models 内置模型缓存，命中时设置 HF_HUB_OFFLINE=1，真正离线可用；源码运行或自定义模型仍使用数据目录缓存。
+- packaging/installer.iss：内置向量模型作为可选组件（约 91MB）打进安装包，未选择时安装包仍可用，首次启动在设置页选择下载。
+- 安装类型说明：完整安装 = 核心 + 内置模型；简洁安装 = 仅核心；自定义安装 = 核心固定，可单独勾选/取消内置模型。
+- packaging/run.py：桌面版改为无控制台窗口启动；日志写入用户数据目录下的 run.log，启动失败可直接查日志。
+- app/main.py：Qdrant 数据目录改为用户数据目录下的 qdrant，不再写入安装目录；打包前也会清理 storage/snapshots，避免把个人运行数据带进安装包。
+- packaging/installer.iss：安装类型页新增文字说明；卸载时通过弹窗询问是否删除个人数据，安装阶段不再出现“卸载选项”。
+- 安装目录与数据目录分离：程序默认安装到 `{autopf}\PDH-PKG`（非管理员下为 `%LOCALAPPDATA%\Programs\PDH-PKG`），个人数据仍单独放在 `%LOCALAPPDATA%\PDH-PKG`。
+- 前端设置页：改为独立页面布局，顶部带返回按钮与保存按钮；进入设置时立即显示加载转圈；测试连接按钮点击后先显示“测试中...”转圈；侧栏移除 Connected 状态与退出按钮。
+- 调试模式：设置 `PDH_PKG_DEBUG=1` 后固定使用内置调试默认值（DeepSeek + Ollama），读取 `.env`，不读 `settings.json` / `settings.debug.json`，设置页保存不影响运行；正式/打包模式只读 `settings.json`，不会读调试值。一键脚本 `packaging/debug.ps1`（需先 cd 到项目根目录或使用完整路径），手动示例：`$env:PDH_PKG_DEBUG='1'; python -m uvicorn app.main:app --port 8001 --reload`，打包版可用 `PDH-PKG.exe --debug`。
+- Redis 降级：`app/core/cache.py` 在 Redis 运行中异常（超时/断连）时自动切回内存存储，`kb_service.py` 缓存读取失败时回退 `kbs.json`，知识库接口不再因 Redis 超时返回 500。
+
+### 产物
+- 安装器：output/PDH-PKG-Setup-0.1.0.exe
+- 便携目录：output/PDH-PKG-0.1.0-portable/
+- 便携压缩包：output/PDH-PKG-0.1.0-desktop.zip
+
+### 验证
+- 打包版无窗口冒烟测试：/health 返回 200。
+- 打包版 /api/settings/test/embedding：本地 ONNX 模型加载成功，维度 512，约 0.24s。
+- pytest tests/ -q --tb=short：55 passed；2 个 Neo4j 集成测试因本地 Neo4j 未启动失败。
+
+## 2026-08-12 - 桌面应用窗口（pywebview）
+
+### 修改
+- packaging/run.py：后台启动 FastAPI 服务，等待 /health 就绪后用 pywebview 打开原生桌面窗口；关窗后停止服务。
+- 支持 PDH_PKG_NO_WINDOW=1 无窗口模式（用于冒烟测试/服务器模式）。
+- requirements.txt 增加 pywebview；build.ps1 增加 --hidden-import webview。
+
+### 产物
+- 便携版：output/PDH-PKG-0.1.0-desktop.zip（约 290MB，含内置模型）
+- 可运行目录：dist2/PDH-PKG/，双击 PDH-PKG.exe 即为桌面应用。
+
+### 验证
+- 无窗口模式冒烟测试：/health 返回 200。
+
+## 2026-08-12 - 安装器生成
+
+### 产物
+- 安装器：output/PDH-PKG-Setup-0.1.0.exe（约 213MB，含内置模型）
+- Inno Setup 7.0.2 编译成功，x64，默认安装到 %LOCALAPPDATA%\PDH-PKG。
+- 模型/Neo4j 为可选组件：仅在 packaging/resources 下存在对应目录时出现在安装向导。
+- 图标使用 favicon.ico。
+
+### 使用
+运行 output/PDH-PKG-Setup-0.1.0.exe 即可安装，安装后可勾选“立即启动 PDH-PKG”。
+
+## 2026-08-12 - 全项目英文注释中文化
+
+### 修改
+- 将 app/ 下 Python、JavaScript、CSS、HTML 中的英文注释与 docstring 全部转为中文。
+- 覆盖：RAG 引擎、记忆系统、GraphRAG、检索器、工具框架、API、core 服务、worker、前端 JS/CSS/HTML。
+- 保留英文提示词字符串、URL 引用、代码标识符和测试文件中的英文，仅转换注释。
+
+### 验证
+- compileall 全量通过
+- node --check app/static/js/app.js 通过
+- pytest tests/ -q --tb=short: 51 passed
+- 2 个 Neo4j 集成测试因本地 Neo4j 未启动而失败，与注释改动无关
+
+## 2026-08-04 - 账号权限调整（全部账号设为 OP）
+
+### 修改
+- app/config.py: user/user123 角色从 user 改为 admin，所有预设账号均为 OP。
+- app/core/auth.py: 旧 token 缺少 role 时按用户名回查当前角色，老登录态自动升级。
+- app/static/js/app.js: 启动时通过 /api/auth/local-token 刷新本地 token，角色隔离已移除。
+
+### 验证
+- user/user123 登录返回 role=admin，可创建并删除知识库。
+
+## 2026-08-04 - 个人数据库可靠性第一批（安全/持久化/检索修复）
+
+### 修改文件
+| 文件 | 改动 |
+|------|------|
+| app/api/documents.py | 上传/删除/重索引统一走 _safe_doc_path，拒绝路径穿越 |
+| app/core/kb_service.py | KB 元数据新增 data/kbs.json 文件持久化，Redis/内存丢失后重启可恢复 |
+| app/rag/hybrid_retriever.py | BM25 保留 filename/page_number/chunk_index 元数据，不再丢失来源信息 |
+| app/rag/retriever.py | rebuild_bm25_index 修正 kb_id/tenant_id 传参错误；HyDE 在 async 调用链中也能触发（线程内运行独立事件循环） |
+
+### 测试结果
+- pytest tests/ -q --tb=short: 37 passed
+- Playwright 真浏览器验证: 每工具一个气泡、展开/收起状态与动画、图谱检索内容单独展示、删除对话确认、新建对话跳转
+
+## 2026-08-04 - 效率优化第一批（GraphRAG 采样 + parent-child 停用 + 可观测日志）
+
+### 修改文件
+| 文件 | 改动 |
+|------|------|
+| app/config.py | 新增 graph_ingest_max_chunks=50 |
+| app/workers/ingestion.py | 自动入库 GraphRAG 默认采样 50 个 chunk，4 并发；入库分阶段计时日志 |
+| app/core/chunker.py | enable_parent_child 默认改为 False（原实现未将 parent_id 写入 Qdrant，纯浪费 embedding/存储） |
+| app/rag/graph.py | chat_stream 增加总耗时/工具数/字符数日志 |
+
+### 说明
+- 自动入库不再全量串行调用 DeepSeek；需要全量图谱时仍可点击“构建图谱”执行完整构建。
+- parent-child 当前实现只建不用且查询逻辑错误，先停用避免 25-33% 的无效索引成本。
+- 后续待办：持久化任务队列、检索去重/缓存、BM25 增量维护、异步阻塞 I/O 清理、指标面板。
+
+### 测试结果
+- pytest tests/ -q --tb=short: 37 passed
+
+## 2026-08-13 - 默认知识库可编辑 + 图谱刷新修复
+
+### 修改
+- app/static/js/app.js：默认知识库允许编辑，编辑弹窗从接口加载名称和描述；新增/编辑按钮在个人版中始终显示；修复保存按钮同时触发创建和更新的重复逻辑。
+- 前端图谱：2D 与 3D 共用“星际星云 / 全息晶体 / 霓虹电路 / 浅色极简”四种设计，设计选择器在 2D 下也始终可见，并同步调整节点、连线、图例和控制按钮样式。
+- app/core/user_settings.py：调试模式读取 `.env` 中的 Neo4j 配置，不再硬编码默认密码；正式模式无设置文件时沿用 `.env`/默认 Neo4j 配置。
+- app/rag/graph_rag.py：Neo4j 连接改为读取当前用户设置，支持刷新时重新检测连接；图谱抽取 LLM 改用设置页配置的对话模型。
+- app/api/graph_api.py：图谱 /data 与 /stats 每次请求可重连 Neo4j；构建前先确认 Neo4j 可用并试调一次抽取模型，模型不可用时不删除旧图谱。
+- app/api/documents.py、app/workers/ingestion.py：图谱清理与自动入库同样按当前 Neo4j 设置执行。
+
+### 验证
+- pytest tests/ -q -p no:cacheprovider --basetemp=.pytest_tmp：57 passed。
+- Playwright 真浏览器验证：新增/编辑/删除按钮可见，默认知识库可打开编辑弹窗并显示“默认知识库 / 系统默认知识库”。
+- 图谱页选择 agent 知识库后点击刷新：显示 180 个实体、331 条关系，画布正常渲染。

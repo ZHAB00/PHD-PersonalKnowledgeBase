@@ -1,11 +1,11 @@
-"""RAG evaluation metrics (lightweight, no ragas dependency)
+"""RAG 评估指标（轻量实现，不依赖 ragas）
 
-Reference (RAG Best Practices Section 9):
-  - Faithfulness: Is the answer grounded in retrieved documents?
-  - Answer Relevancy: Does the answer address the question?
-  - Context Precision: Are retrieved chunks actually relevant?
+参考（RAG 最佳实践第 9 节）：
+  - 忠实度：回答是否基于检索到的文档？
+  - 回答相关性：回答是否切题？
+  - 上下文精度：检索到的分块是否真正相关？
 
-All metrics use LLM-as-judge with DeepSeek.
+所有指标使用 DeepSeek 作为 LLM 裁判。
 """
 from __future__ import annotations
 import json
@@ -17,7 +17,7 @@ import httpx
 
 from app.config import settings
 
-# Prompt templates for each metric
+# 各指标的提示词模板
 
 FAITHFULNESS_PROMPT = """You are an evaluator. Given a question, retrieved context, and an AI answer, determine if the answer is FAITHFUL to the context (only uses information from the context, no fabrication).
 
@@ -76,7 +76,7 @@ def _extract_json(text: str) -> Optional[dict]:
 
 
 def evaluate_faithfulness(question: str, context: str, answer: str) -> dict:
-    """Evaluate if answer is grounded in retrieved context. Returns {score: 0-10, reason: str}."""
+    """评估回答是否基于检索上下文。返回 {score: 0-10, reason: str}。"""
     client = _get_client()
     prompt = FAITHFULNESS_PROMPT.format(question=question, context=context[:3000], answer=answer[:2000])
     try:
@@ -94,7 +94,7 @@ def evaluate_faithfulness(question: str, context: str, answer: str) -> dict:
 
 
 def evaluate_answer_relevancy(question: str, answer: str) -> dict:
-    """Evaluate if answer is relevant to question. Returns {score: 0-10, reason: str}."""
+    """评估回答是否与问题相关。返回 {score: 0-10, reason: str}。"""
     client = _get_client()
     prompt = ANSWER_RELEVANCY_PROMPT.format(question=question, answer=answer[:2000])
     try:
@@ -112,7 +112,7 @@ def evaluate_answer_relevancy(question: str, answer: str) -> dict:
 
 
 def evaluate_context_precision(question: str, contexts: list[str]) -> dict:
-    """Evaluate retrieval precision. Returns {score: 0-10, reason: str}."""
+    """评估检索精度。返回 {score: 0-10, reason: str}。"""
     client = _get_client()
     ctx_str = "\n---\n".join(f"[{i}] {c[:500]}" for i, c in enumerate(contexts[:10]))
     prompt = CONTEXT_PRECISION_PROMPT.format(question=question, contexts=ctx_str)
@@ -131,14 +131,14 @@ def evaluate_context_precision(question: str, contexts: list[str]) -> dict:
 
 
 def run_ragas_eval(question: str, answer: str, context_chunks: list[str]) -> dict:
-    """Run all three RAGAS metrics and return summary.
+    """运行全部三个 RAGAS 指标并返回汇总。
 
-    Args:
-        question: User question
-        answer: LLM generated answer
-        context_chunks: List of retrieved context strings
+    参数：
+        question: 用户问题
+        answer: LLM 生成的回答
+        context_chunks: 检索到的上下文字符串列表
 
-    Returns:
+    返回：
         {
             "faithfulness": {"score": 8, "reason": "..."},
             "answer_relevancy": {"score": 7, "reason": "..."},

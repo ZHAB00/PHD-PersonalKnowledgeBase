@@ -1,4 +1,4 @@
-"""Knowledge Base model"""
+"""知识库模型"""
 from __future__ import annotations
 from datetime import datetime, UTC
 from typing import Optional

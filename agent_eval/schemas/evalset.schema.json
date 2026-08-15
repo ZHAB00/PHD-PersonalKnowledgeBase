@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "agent_eval/schemas/evalset.schema.json",
+  "title": "EvalSet",
+  "description": "Agent 评测集格式（对应《agent评估指标体系.md》§6 评测集设计规范）",
+  "type": "object",
+  "required": ["name", "tasks"],
+  "properties": {
+    "name": {"type": "string", "description": "评测集名称"},
+    "version": {"type": "string", "default": "1.0"},
+    "description": {"type": "string", "default": ""},
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "question"],
+        "properties": {
+          "id": {"type": "string", "description": "任务唯一 id"},
+          "category": {
+            "type": "string",
+            "enum": ["factual_qa", "multi_hop", "retrieval_synthesis", "tool_use", "open_generation", "refusal_boundary", "adversarial", "misc"],
+            "default": "factual_qa"
+          },
+          "difficulty": {"type": "string", "enum": ["L1", "L2", "L3", "L4"], "default": "L2"},
+          "question": {"type": "string"},
+          "kb_id": {"type": "string", "default": "default"},
+          "gold_answer": {"type": ["string", "null"], "description": "黄金参考答案"},
+          "gold_doc_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "相关文档 id/文件名，用于计算 Hit@k / MRR（M9）"
+          },
+          "sub_requirements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "description"],
+              "properties": {
+                "id": {"type": "string"},
+                "description": {"type": "string"},
+                "required": {"type": "boolean", "default": true}
+              }
+            }
+          },
+          "assertions": {
+            "type": "array",
+            "description": "可执行断言（硬约束判定通道）",
+            "items": {
+              "type": "object",
+              "required": ["id"],
+              "properties": {
+                "id": {"type": "string"},
+                "type": {"type": "string", "enum": ["contains", "contains_any", "not_contains", "equals", "regex"], "default": "contains"},
+                "target": {"type": "string", "enum": ["answer", "tool_result", "source_count"], "default": "answer"},
+                "value": {"type": "string", "default": ""},
+                "negate": {"type": "boolean", "default": false}
+              }
+            }
+          },
+          "tools_allowed": {
+            "type": ["array", "null"],
+            "items": {"type": "string"},
+            "description": "越权检查（M22）：null/缺省=不检查；[]=禁止调用任何工具；非空=仅允许列表中工具"
+          },
+          "should_refuse": {"type": "boolean", "default": false, "description": "该任务应当拒答（用于拒答准确率 M21）"},
+          "variants": {"type": "array", "items": {"type": "string"}, "description": "扰动变体文本（鲁棒性 M17）"},
+          "rubric_hints": {
+            "type": "object",
+            "description": "扩展提示，如 {\"variant_of\": \"t1\"} 标记鲁棒性变体",
+            "additionalProperties": true
+          },
+          "session_group": {
+            "type": ["string", "null"],
+            "description": "多轮对话分组：同组任务按列表顺序在同一会话连续提问（M28）"
+          },
+          "turn_index": {
+            "type": ["integer", "null"],
+            "description": "组内轮次（0 起），用于逐轮正确率与上下文衰减"
+          },
+          "judge_question": {
+            "type": ["string", "null"],
+            "description": "判卷用自包含问题；agent 仍看到原 question（指代句需要它）"
+          },
+          "max_steps_hint": {"type": ["integer", "null"]}
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

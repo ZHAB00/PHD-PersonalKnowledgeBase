@@ -39,7 +39,7 @@ def save_session(session_id: str, title: str, user_id: str = "default"):
     conn.commit()
 
 def get_session_title(session_id: str) -> str:
-    """Return current session title or empty string (no title set)."""
+    """返回当前会话标题；未设置时返回空字符串。"""
     conn = _get_conn()
     row = conn.execute("SELECT title FROM sessions WHERE id = ?", (session_id,)).fetchone()
     return row[0] if row else ""
@@ -50,7 +50,7 @@ def list_sessions(user_id: str = "default") -> list:
     return [{"id": r[0], "title": r[1], "created_at": r[2]} for r in rows]
 
 def load_history_paginated(session_id: str, offset: int, limit: int) -> list:
-    """Load history with offset/limit for infinite scroll. Returns (messages, has_more)."""
+    """按偏移量/数量加载历史记录，用于无限滚动。返回 (消息列表, 是否还有更多)。"""
     conn = _get_conn()
     row = conn.execute("SELECT data FROM history WHERE session_id = ?", (session_id,)).fetchone()
     if not row:

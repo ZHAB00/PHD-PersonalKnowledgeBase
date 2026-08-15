@@ -1,4 +1,4 @@
-"""Qdrant vector store with multi-collection KB isolation"""
+"""Qdrant 向量库：按知识库隔离多个集合"""
 from __future__ import annotations
 import logging
 from typing import Optional
@@ -32,19 +32,86 @@ def _collection_name(kb_id: str) -> str:
     return f"{COLLECTION_PREFIX}{kb_id}"
 
 
+def check_embedding_consistency(kb_id: str = DEFAULT_KB) -> bool:
+    """检查知识库向量集合维度与当前嵌入模型是否一致。
+
+    返回 False 时表示检索会因维度不匹配而失败，应提示用户切换嵌入模型或重建索引。
+    """
+    try:
+        client = _get_client()
+        col_name = _collection_name(kb_id)
+        names = [c.name for c in client.get_collections().collections]
+        if col_name not in names:
+            return True
+        info = client.get_collection(col_name)
+        vectors = info.config.params.vectors
+        current_dim = None
+        if isinstance(vectors, dict):
+            for v in vectors.values():
+                if hasattr(v, "size"):
+                    current_dim = v.size
+                    break
+        else:
+            current_dim = getattr(vectors, "size", None)
+        expected_dim = embedding_dimension()
+        if current_dim and current_dim != expected_dim:
+            logger.error(
+                "Embedding dimension mismatch: collection %s is %s dims, current model is %s dims; "
+                "document retrieval is disabled until reindex or provider switch",
+                col_name, current_dim, expected_dim,
+            )
+            return False
+        return True
+    except Exception as e:
+        logger.warning("Failed to check embedding consistency for %s: %s", kb_id, e)
+        return True
+
+
 def ensure_collection(kb_id: str = DEFAULT_KB):
     client = _get_client()
     col_name = _collection_name(kb_id)
     collections = client.get_collections().collections
     names = [c.name for c in collections]
     if col_name not in names:
-        client.create_collection(
-            collection_name=col_name,
-            vectors_config=VectorParams(size=embedding_dimension(), distance=Distance.COSINE),
-        )
-        client.create_payload_index(collection_name=col_name, field_name="tenant_id", field_schema=models.PayloadSchemaType.KEYWORD)
-        client.create_payload_index(collection_name=col_name, field_name="doc_id", field_schema=models.PayloadSchemaType.KEYWORD)
-        logger.info(f"Created collection: {col_name}")
+        _create_collection(client, col_name)
+        return
+    try:
+        info = client.get_collection(col_name)
+        vectors = info.config.params.vectors
+        current_dim = None
+        if isinstance(vectors, dict):
+            for v in vectors.values():
+                if hasattr(v, "size"):
+                    current_dim = v.size
+                    break
+        else:
+            current_dim = getattr(vectors, "size", None)
+        expected_dim = embedding_dimension()
+        if current_dim and current_dim != expected_dim:
+            if info.points_count == 0:
+                logger.warning(
+                    "Collection %s dimension mismatch (%s != %s) and empty; recreating",
+                    col_name, current_dim, expected_dim,
+                )
+                client.delete_collection(col_name)
+                _create_collection(client, col_name)
+            else:
+                logger.warning(
+                    "Collection %s dimension mismatch (%s != %s); existing vectors incompatible",
+                    col_name, current_dim, expected_dim,
+                )
+    except Exception as e:
+        logger.warning("Failed to validate collection %s: %s", col_name, e)
+
+
+def _create_collection(client, col_name: str):
+    client.create_collection(
+        collection_name=col_name,
+        vectors_config=VectorParams(size=embedding_dimension(), distance=Distance.COSINE),
+    )
+    client.create_payload_index(collection_name=col_name, field_name="tenant_id", field_schema=models.PayloadSchemaType.KEYWORD)
+    client.create_payload_index(collection_name=col_name, field_name="doc_id", field_schema=models.PayloadSchemaType.KEYWORD)
+    logger.info("Created collection: %s", col_name)
 
 
 def delete_collection(kb_id: str):
@@ -77,7 +144,7 @@ def upsert_chunks(chunks: list[DocumentChunk], kb_id: str = DEFAULT_KB) -> int:
                 "kb_id": kb_id,
             },
         ))
-        # Batch upsert to avoid Qdrant connection reset on large payloads
+        # 分批写入，避免大批量数据导致 Qdrant 连接重置
     BATCH = 200
     for i in range(0, len(points), BATCH):
         batch = points[i:i + BATCH]
@@ -129,7 +196,7 @@ def delete_document(doc_id: str, kb_id: str = DEFAULT_KB, tenant_id: Optional[st
 
 
 def delete_by_filename(filename: str, kb_id: str = DEFAULT_KB, tenant_id: Optional[str] = None):
-    """Delete all vectors matching a filename (for ghost cleanup)."""
+    """删除匹配文件名的所有向量（用于幽灵数据清理）。"""
     client = _get_client()
     col_name = _collection_name(kb_id)
     must_filters = [models.FieldCondition(key="filename", match=models.MatchValue(value=filename))]
@@ -155,7 +222,7 @@ def count_documents(kb_id: str = DEFAULT_KB, tenant_id: Optional[str] = None) ->
 
 
 def list_all_chunks(kb_id: str = DEFAULT_KB) -> list[dict]:
-    """Get all chunks for BM25 rebuild (limit 10000)."""
+    """获取全部分块用于 BM25 重建（最多 10000 条）。"""
     client = _get_client()
     col_name = _collection_name(kb_id)
     try:

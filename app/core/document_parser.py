@@ -80,8 +80,9 @@ def extract_pdf_tables(page) -> list[dict]:
     found = page.find_tables()
     for t in found:
         rows = []
-        for row in t.rows:
-            cells = [cell.strip() if cell else "" for cell in row.cells]
+        extracted = t.extract() or []
+        for row in extracted:
+            cells = [(cell or "").strip() if isinstance(cell, str) else "" for cell in row]
             rows.append(cells)
         if rows:
             tables.append({"headers": rows[0] if len(rows) > 1 else [], "rows": rows[1:] if len(rows) > 1 else rows, "bbox": t.bbox})

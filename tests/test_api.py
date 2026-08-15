@@ -1,5 +1,5 @@
 import sys, os
-os.chdir(r"E:\aProgramming_code\GetAJobProject\企业知识库搭建")
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.getcwd())
 
 import pytest
@@ -11,6 +11,8 @@ from app.main import app
 async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        login = await ac.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
+        ac.headers.update({"Authorization": "Bearer " + login.json()["access_token"]})
         yield ac
 
 
@@ -23,17 +25,23 @@ async def test_health(client):
 
 @pytest.mark.asyncio
 async def test_upload_txt(client):
+    login = await client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
+    token = login.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
     files = {"file": ("test.txt", b"Hello world. This is a test document.")}
     data = {"tenant_id": "default"}
-    r = await client.post("/api/documents/upload", files=files, data=data)
+    r = await client.post("/api/documents/upload", files=files, data=data, headers=headers)
     assert r.status_code == 200
     assert "task_id" in r.json()
 
 
 @pytest.mark.asyncio
 async def test_upload_bad_format(client):
+    login = await client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
+    token = login.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
     files = {"file": ("test.exe", b"bad")}
-    r = await client.post("/api/documents/upload", files=files, data={"tenant_id": "default"})
+    r = await client.post("/api/documents/upload", files=files, data={"tenant_id": "default"}, headers=headers)
     assert r.status_code == 400
 
 

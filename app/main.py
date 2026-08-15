@@ -1,5 +1,7 @@
 from __future__ import annotations
+from collections import defaultdict
 import logging
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -19,6 +21,7 @@ from app.api.evaluation import router as eval_router
 from app.api.kb import router as kb_router
 from app.api.auth import router as auth_router
 from app.api.graph_api import router as graph_router
+from app.api.settings import router as settings_router
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger(__name__)
@@ -27,7 +30,7 @@ _qdrant_process = None
 
 
 def _start_qdrant():
-    """Start Qdrant as a subprocess if not already running."""
+    """以子进程方式启动 Qdrant（若尚未运行）。"""
     global _qdrant_process
     import socket
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -49,8 +52,11 @@ def _start_qdrant():
         return
 
     try:
+        qdrant_data_dir = Path(settings.data_dir).resolve() / "qdrant"
+        qdrant_data_dir.mkdir(parents=True, exist_ok=True)
         _qdrant_process = subprocess.Popen(
             [str(qdrant_path.resolve())],
+            cwd=str(qdrant_data_dir),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW,
@@ -89,7 +95,13 @@ def _stop_qdrant():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"LangChain 1.0+ tools loaded: {len(BUILTIN_TOOLS_LC)} tools")
-    logger.info(f"企业知识库服务启动 - 端口 {settings.service_port}")
+    logger.info(f"PDH-PKG 服务启动 - 端口 {settings.service_port}")
+    if JWT_SECRET.startswith("insecure-fallback"):
+        logger.warning("Security: JWT secret is a fallback. Set JWT_SECRET_KEY in .env.")
+    elif settings.jwt_secret_key in ("change-me-in-production-use-a-strong-random-key", ""):
+        logger.warning("Security: JWT secret auto-generated and persisted to data/secret.key.")
+    if "admin123" in settings.preset_users or "user123" in settings.preset_users:
+        logger.warning("Security: preset passwords are weak defaults. Change them in .env.")
     _start_qdrant()
     await cache._init()
 
@@ -102,6 +114,11 @@ async def lifespan(app: FastAPI):
         for kb in kbs:
             try:
                 vector_store.ensure_collection(kb.id)
+                if not vector_store.check_embedding_consistency(kb.id):
+                    logger.error(
+                        "KB %s: embedding dimension mismatch; document retrieval disabled until reindex or provider switch",
+                        kb.id,
+                    )
             except Exception as e:
                 logger.warning(f"Qdrant init failed for kb:{kb.id}: {e}")
         logger.info("Qdrant collections 就绪")
@@ -109,10 +126,11 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Qdrant 连接失败（服务仍可启动）: {e}")
 
 
-    # Neo4j
+    # Neo4j 知识图谱
     import os
-    neo4j_bin = r'E:/neo4j-chs-community-2026.05.0-windows/bin/neo4j.bat'
-    if os.path.exists(neo4j_bin):
+    from app.core.user_settings import get_settings
+    neo4j_bin = settings.neo4j_bin
+    if neo4j_bin and os.path.exists(neo4j_bin) and get_settings().neo4j_enabled:
         import socket
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(1)
@@ -124,10 +142,11 @@ async def lifespan(app: FastAPI):
             s.close()
             import subprocess
             env = os.environ.copy()
-            env.setdefault('JAVA_HOME', r'D:\Program Files\Java\jdk-21')
+            if settings.neo4j_java_home:
+                env.setdefault('JAVA_HOME', settings.neo4j_java_home)
             subprocess.Popen([neo4j_bin, 'start'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
             import time
-            for _ in range(20):
+            for _ in range(10):
                 try:
                     s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     s2.settimeout(1)
@@ -137,12 +156,13 @@ async def lifespan(app: FastAPI):
                     break
                 except Exception:
                     time.sleep(2)
-    # Warm up graph_rag
-    try:
-        from app.rag.graph_rag import _get_driver
-        _get_driver()
-    except Exception:
-        pass
+    # 预热知识图谱模块
+    if get_settings().neo4j_enabled:
+        try:
+            from app.rag.graph_rag import _get_driver
+            _get_driver()
+        except Exception:
+            pass
 
     yield
 
@@ -152,7 +172,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="企业知识库",
+    title="PDH-PKG",
     description="企业级知识库搭建与智能对话系统",
     version="2.0.0",
     lifespan=lifespan,
@@ -160,24 +180,54 @@ app = FastAPI(
 
 
 # ============================================================
-# Auth middleware: extract user_id from JWT token for all requests
+# 鉴权中间件：从 JWT 令牌中解析用户信息
 # ============================================================
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from app.core.auth import decode_token
+from app.core.auth import decode_token, JWT_SECRET
+
+_rate_hits: dict[str, list[float]] = defaultdict(list)
+RATE_LIMIT_MAX = 120
+RATE_LIMIT_WINDOW = 60
+
+
+def _check_rate_limit(key: str) -> bool:
+    if os.environ.get("PDH_PKG_DEBUG", "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    now = time.monotonic()
+    hits = [t for t in _rate_hits[key] if now - t < RATE_LIMIT_WINDOW]
+    _rate_hits[key] = hits
+    if len(hits) >= RATE_LIMIT_MAX:
+        return False
+    _rate_hits[key].append(now)
+    return True
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Extract user_id from Authorization header and inject into request state."""
+    """要求 /api/* 使用 Bearer 鉴权（登录接口除外），并注入用户状态。"""
     async def dispatch(self, request: Request, call_next):
+        from fastapi.responses import JSONResponse
+        path = request.url.path
+        if path.startswith("/api/"):
+            client_host = request.client.host if request.client else "local"
+            if not _check_rate_limit(client_host + ":" + path):
+                return JSONResponse({"detail": "请求过于频繁"}, status_code=429)
+        if path.startswith("/api/") and path not in (
+            "/api/auth/login",
+            "/api/auth/local-token",
+            "/api/auth/login-local",
+            "/api/settings/public",
+        ):
+            auth_header = request.headers.get("Authorization", "")
+            if not auth_header.startswith("Bearer "):
+                return JSONResponse({"detail": "未认证"}, status_code=401)
+            decoded = decode_token(auth_header[7:])
+            if not decoded:
+                return JSONResponse({"detail": "无效的认证令牌"}, status_code=401)
+            request.state.user_id = decoded["user_id"]
+            request.state.username = decoded["username"]
+            return await call_next(request)
         user_id = "default"
         username = "anonymous"
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-            decoded = decode_token(token)
-            if decoded:
-                user_id = decoded["user_id"]
-                username = decoded["username"]
         request.state.user_id = user_id
         request.state.username = username
         return await call_next(request)
@@ -200,6 +250,7 @@ app.include_router(chat_router)
 app.include_router(eval_router)
 app.include_router(auth_router)
 app.include_router(graph_router)
+app.include_router(settings_router)
 
 
 
@@ -225,4 +276,4 @@ async def index():
     template_path = Path(__file__).parent / "templates" / "index.html"
     if template_path.exists():
         return FileResponse(str(template_path))
-    return {"message": "企业知识库 API 已运行，请访问 /docs 查看 API 文档"}
+    return {"message": "PDH-PKG API 已运行，请访问 /docs 查看 API 文档"}

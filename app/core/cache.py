@@ -20,6 +20,14 @@ _enabled = False
 _fallback_store: dict[str, str] = {}
 
 
+def _disable_redis(reason: str):
+    """Redis 运行中异常时降级到内存存储，避免接口 500。"""
+    global _enabled
+    if _enabled:
+        _enabled = False
+        logger.warning(f"Redis 不可用，切换到内存存储: {reason}")
+
+
 async def _init():
     global _pool, _enabled
     if not _REDIS_AVAILABLE:
@@ -49,49 +57,67 @@ async def get_redis():
 
 
 async def set(key: str, value: str, ex: int | None = None):
-    """Set a raw string value."""
+    """写入原始字符串值。"""
     if _enabled and _client:
-        await _client.set(key, value, ex=ex)
-    else:
-        _fallback_store[key] = value
+        try:
+            await _client.set(key, value, ex=ex)
+            return
+        except Exception as e:
+            _disable_redis(str(e))
+    _fallback_store[key] = value
 
 
 async def get(key: str) -> Optional[str]:
-    """Get a raw string value."""
+    """读取原始字符串值。"""
     if _enabled and _client:
-        return await _client.get(key)
+        try:
+            return await _client.get(key)
+        except Exception as e:
+            _disable_redis(str(e))
     return _fallback_store.get(key)
 
 
 async def set_json(key: str, value, ex: int | None = None):
     if _enabled and _client:
-        await _client.set(key, json.dumps(value, ensure_ascii=False, default=str), ex=ex)
-    else:
-        _fallback_store[key] = json.dumps(value, ensure_ascii=False, default=str)
+        try:
+            await _client.set(key, json.dumps(value, ensure_ascii=False, default=str), ex=ex)
+            return
+        except Exception as e:
+            _disable_redis(str(e))
+    _fallback_store[key] = json.dumps(value, ensure_ascii=False, default=str)
 
 
 async def get_json(key: str) -> Optional[dict | list]:
     if _enabled and _client:
-        raw = await _client.get(key)
-        if raw:
-            return json.loads(raw)
-    else:
-        raw = _fallback_store.get(key)
-        if raw:
-            return json.loads(raw)
+        try:
+            raw = await _client.get(key)
+            if raw:
+                return json.loads(raw)
+            return None
+        except Exception as e:
+            _disable_redis(str(e))
+    raw = _fallback_store.get(key)
+    if raw:
+        return json.loads(raw)
     return None
 
 
 async def delete(key: str):
     if _enabled and _client:
-        await _client.delete(key)
-    else:
-        _fallback_store.pop(key, None)
+        try:
+            await _client.delete(key)
+            return
+        except Exception as e:
+            _disable_redis(str(e))
+    _fallback_store.pop(key, None)
 
 
 async def keys(pattern: str) -> list[str]:
     if _enabled and _client:
-        return await _client.keys(pattern)
+        try:
+            return await _client.keys(pattern)
+        except Exception as e:
+            _disable_redis(str(e))
     return [k for k in _fallback_store if k.startswith(pattern.split(":")[0])]
 
 

@@ -23,14 +23,14 @@ class EvalResponse(BaseModel):
 
 @router.post("/run", response_model=EvalResponse)
 async def run_evaluation(req: EvalRequest):
-    """Run a single RAG query and evaluate with RAGAS metrics.
+    """运行单条 RAG 查询，并用 RAGAS 指标评估。
 
-    Returns the answer, sources, and faithfulness/answer_relevancy/context_precision scores.
+    返回回答、来源，以及忠实度/回答相关性/上下文精度评分。
     """
     if not req.question.strip():
         raise HTTPException(400, "问题不能为空")
 
-    # Get RAG response
+    # 获取 RAG 回答
     resp: ChatResponse = await chat(
         session_id="eval",
         message=req.question,
@@ -39,10 +39,10 @@ async def run_evaluation(req: EvalRequest):
         rerank_strategy="mmr",
     )
 
-    # Extract context chunks
+    # 提取上下文分块
     context_chunks = [s.content for s in resp.sources]
 
-    # Run evaluation
+    # 运行评估
     metrics = run_ragas_eval(
         question=req.question,
         answer=resp.answer,

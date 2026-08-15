@@ -1,12 +1,12 @@
-"""RAG chat engine v4: Tool-first architecture — RAG as a tool, not pre-fetch
+"""RAG 聊天引擎 v4：工具优先架构 —— RAG 作为工具，而非预取
 
-Flow:
-  1. User message arrives
-  2. Memory context loaded (cached)
-  3. LLM receives: system prompt + memory + history + user message + TOOLS
-  4. LLM decides: answer directly (greetings) OR call tools (search_knowledge_base, etc.)
-  5. Agent loop: tool call -> execute -> feed result -> LLM answers
-  6. Post-response: summarize, extract facts, store memories
+流程：
+  1. 用户消息到达
+  2. 加载记忆上下文（缓存）
+  3. LLM 接收：系统提示词 + 记忆 + 历史 + 用户消息 + 工具
+  4. LLM 决定：直接回答（问候）或调用工具（search_knowledge_base 等）
+  5. 智能体循环：调用工具 -> 执行 -> 返回结果 -> LLM 回答
+  6. 回答后：总结、抽取事实、存储记忆
 """
 from __future__ import annotations
 import asyncio
@@ -14,23 +14,24 @@ import hashlib
 import json
 import logging
 import re
+import threading
+import time
 from typing import AsyncGenerator, Optional
 import httpx
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from app.config import settings
 from app.rag.retriever import retrieve
-from app.rag.prompts import build_history_prompt
 from app.rag.memory import (
     apply_token_budget, should_summarize, summarize_conversation,
     store_long_term_memory, retrieve_long_term_memory,
     extract_key_facts, score_importance, build_memory_context,
 )
-from app.rag.tools import get_tools, execute_tool
+from app.rag.tools import get_tools, execute_tool, tool_result_status
 from app.models.chat import ChatResponse, SourceReference, ToolCallEvent
 from app.core import cache
 from app.core.chat_store import save_history, load_history, load_history_paginated, delete_history as delete_chat_history
-from app.prompts import SYSTEM_PROMPT, REFUSAL_RESPONSE
+from app.prompts import SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ MAX_TOOL_ROUNDS = 5
 
 
 def _background_task(coro, name=""):
-    """Fire-and-forget with proper error handling."""
+    """后台任务：启动后即忘，并做好错误处理。"""
     async def _wrapped():
         try:
             await coro
@@ -48,13 +49,25 @@ def _background_task(coro, name=""):
     asyncio.create_task(_wrapped())
 
 
-def _get_deepseek_client(timeout: float = 120.0) -> OpenAI:
-    return OpenAI(base_url=settings.deepseek_base_url, api_key=settings.deepseek_api_key,
-                   timeout=httpx.Timeout(timeout, connect=10.0))
+def _background_thread(coro, name=""):
+    """把含同步阻塞调用的协程放到独立线程，避免卡住事件循环。"""
+    def _wrapped():
+        try:
+            asyncio.run(coro)
+        except Exception as e:
+            logger.debug(f"Background thread {name!r} failed (non-critical): {e}")
+    threading.Thread(target=_wrapped, name=name or "bg-task", daemon=True).start()
+
+
+def _get_deepseek_client(timeout: float = 120.0) -> AsyncOpenAI:
+    from app.core.user_settings import chat_config
+    cfg = chat_config()
+    return AsyncOpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"],
+                       timeout=httpx.Timeout(timeout, connect=10.0))
 
 
 # ============================================================
-# History helpers
+# 历史记录辅助函数
 # ============================================================
 
 def _history_key(session_id: str) -> str:
@@ -63,7 +76,7 @@ def _history_key(session_id: str) -> str:
 
 async def _get_history(session_id: str) -> list[dict]:
     data = load_history(session_id)
-    # Preserve reasoning_content for deepseek-v4-flash thinking mode
+    # 保留 reasoning_content，供 deepseek-v4-flash 思考模式使用
     return data
 
 
@@ -76,8 +89,45 @@ def _count_turns(history: list[dict]) -> int:
 
 
 # ============================================================
-# Tool call events builder
+# 工具调用事件构建
 # ============================================================
+
+def _extract_sources_from_result(result_str) -> list[dict]:
+    """从工具结果字符串中提取可持久化的来源引用。"""
+    sources = []
+    try:
+        data = json.loads(result_str) if isinstance(result_str, str) else result_str
+        if not isinstance(data, dict):
+            return sources
+        if data.get("status") == "ok" and "data" in data:
+            data = data["data"]
+        for r in data.get("results", []):
+            sources.append({
+                "doc_id": r.get("doc_id", ""),
+                "filename": r.get("filename", ""),
+                "content": r.get("content", ""),
+                "score": r.get("score", 0.0),
+                "page_number": r.get("page"),
+            })
+    except Exception:
+        pass
+    return sources
+
+
+def _guard_output(answer: str) -> str:
+    """脱敏泄露的密钥，并记录疑似拒答/系统提示词泄露信号。"""
+    import re
+    if not answer:
+        return answer
+    redacted = re.sub(r"sk-[A-Za-z0-9]{8,}", "[REDACTED]", answer)
+    redacted = redacted.replace("kb123456", "[REDACTED]")
+    low = redacted.lower()
+    if any(k in low for k in ["system prompt", "系统提示词", "当前知识库id", "PDH-PKG 智能助手"]):
+        logger.warning("Output guard: possible system prompt leak detected")
+    if any(k in low for k in ["i cannot", "sorry, i can't", "抱歉，我无法", "拒绝回答"]):
+        logger.info("Output guard: refusal detected")
+    return redacted
+
 
 def _build_tool_call_events(tool_messages: list[dict]) -> list[ToolCallEvent]:
     events = []
@@ -90,66 +140,100 @@ def _build_tool_call_events(tool_messages: list[dict]) -> list[ToolCallEvent]:
                     args = json.loads(tc["function"]["arguments"])
                 except (json.JSONDecodeError, KeyError):
                     args = {}
-                result_str = result_msg.get("content", "")[:300]
+                result_str = result_msg.get("content", "")
                 events.append(ToolCallEvent(
                     tool_name=tc["function"]["name"],
                     arguments=args,
-                    result=result_str,
-                    status="ok" if "error" not in result_str.lower() else "error",
+                    result=result_str[:300],
+                    status=tool_result_status(result_str),
+                    sources=_extract_sources_from_result(result_str),
                 ))
     return events
 
 
 # ============================================================
-# Agent loop
+# 智能体循环
 # ============================================================
 
 async def _agent_loop(
-    client: OpenAI,
+    client: AsyncOpenAI,
     messages: list[dict],
     kb_id: str = "default",
     user_id: str = "default",
+    enable_graphrag: bool = True,
     max_rounds: int = MAX_TOOL_ROUNDS,
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], dict]:
     tools = get_tools()
     tool_messages = []
+    from app.core.user_settings import chat_config
+    cfg = chat_config()
+    usage_acc = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    pending_reasoning = ""
+    for m in reversed(messages):
+        if m.get("role") == "assistant" and m.get("reasoning_content"):
+            pending_reasoning = m["reasoning_content"]
+            break
 
     for round_idx in range(max_rounds):
         kwargs = {
-            "model": settings.deepseek_model,
+            "model": cfg["model"],
             "messages": messages,
             "temperature": 0.3,
             "max_tokens": 2048,
         }
+        if cfg.get("extra_body"):
+            kwargs["extra_body"] = cfg["extra_body"]
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        resp = client.chat.completions.create(**kwargs)
+        resp = await client.chat.completions.create(**kwargs)
         msg = resp.choices[0].message
+        u = getattr(resp, "usage", None)
+        if u:
+            usage_acc["prompt_tokens"] += getattr(u, "prompt_tokens", 0) or 0
+            usage_acc["completion_tokens"] += getattr(u, "completion_tokens", 0) or 0
+            usage_acc["total_tokens"] += getattr(u, "total_tokens", 0) or 0
+        rc = getattr(msg, "reasoning_content", None)
+        if rc:
+            pending_reasoning = rc
 
         if not msg.tool_calls:
-            return msg.content or "", tool_messages
+            return msg.content or "", tool_messages, usage_acc
 
+        prepared = []
         for tc in msg.tool_calls:
             tool_name = tc.function.name
             try:
                 args = json.loads(tc.function.arguments)
             except json.JSONDecodeError:
                 args = {}
-
+            prepared.append((tc, tool_name, args))
             logger.info(f"Agent calls tool: {tool_name}({args})")
-            result = await execute_tool(tool_name, args, user_id=user_id)
+
+        results = await asyncio.gather(
+            *(
+                execute_tool(tool_name, args, user_id=user_id, kb_id=kb_id, enable_graphrag=enable_graphrag)
+                for _, tool_name, args in prepared
+            ),
+            return_exceptions=True,
+        )
+
+        for (tc, tool_name, args), result in zip(prepared, results):
+            if isinstance(result, Exception):
+                result = json.dumps({"error": f"工具执行失败: {result}", "count": 0, "is_empty": True}, ensure_ascii=False)
 
             tool_msg_assistant = {
                 "role": "assistant",
-                "content": None,
+                "content": getattr(msg, "content", None),
                 "tool_calls": [{
                     "id": tc.id,
                     "type": "function",
                     "function": {"name": tool_name, "arguments": tc.function.arguments},
                 }],
             }
+            if pending_reasoning:
+                tool_msg_assistant["reasoning_content"] = pending_reasoning
             tool_msg_result = {
                 "role": "tool",
                 "tool_call_id": tc.id,
@@ -160,11 +244,11 @@ async def _agent_loop(
             tool_messages.append(tool_msg_assistant)
             tool_messages.append(tool_msg_result)
 
-    return "抱歉，处理超时，请尝试简化您的问题。", tool_messages
+    return "抱歉，处理超时，请尝试简化您的问题。", tool_messages, usage_acc
 
 
 # ============================================================
-# After-response: summarize + extract facts
+# 回答后处理：总结 + 抽取事实
 # ============================================================
 
 async def _after_response_tasks(session_id: str, user_id: str, history: list[dict]):
@@ -178,7 +262,7 @@ async def _after_response_tasks(session_id: str, user_id: str, history: list[dic
                     user_id=user_id, content=f"[会话摘要] {summary}",
                     memory_type="summary", importance=imp, session_id=session_id,
                 )
-                # Update session title from summary ONLY if still default
+                # 仅在标题仍为默认值时用总结更新会话标题
                 try:
                     import re
                     from app.core.chat_store import get_session_title, save_session
@@ -215,11 +299,11 @@ async def _after_response_tasks(session_id: str, user_id: str, history: list[dic
 
 
 # ============================================================
-# Source extraction from tool results
+# 从工具结果中提取来源
 # ============================================================
 
 def _extract_sources(tool_messages: list[dict]) -> list[SourceReference]:
-    """Extract SourceReference objects from search_knowledge_base tool results."""
+    """从 search_knowledge_base 工具结果中提取 SourceReference 对象。"""
     sources = []
     for msg in tool_messages:
         if msg.get("role") != "tool":
@@ -242,7 +326,7 @@ def _extract_sources(tool_messages: list[dict]) -> list[SourceReference]:
 
 
 # ============================================================
-# Public API
+# 对外 API
 # ============================================================
 
 async def chat(
@@ -255,12 +339,12 @@ async def chat(
     enable_graphrag: bool = True,
     user_id: str = "default",
 ) -> ChatResponse:
-    """Unified chat: LLM decides whether to call tools (RAG search, memory, etc.).
+    """统一聊天入口：LLM 决定是否调用工具（RAG 检索、记忆等）。
 
-    No pre-fetch of RAG context. Greetings like "hello" go straight to LLM.
-    Knowledge questions trigger search_knowledge_base tool automatically.
+    不预取 RAG 上下文。像 "hello" 这样的问候直接交给 LLM。
+    知识类问题会自动触发 search_knowledge_base 工具。
     """
-    # Fast path: file listing queries bypass LLM (deterministic, no hallucination risk)
+    # 快速路径：文件列表类查询绕过 LLM（确定性输出，无幻觉风险）
     file_list_patterns = ["有哪些文档", "有哪些文件", "文件列表", "文档列表", "几个文档",
                           "几个文件", "列出文件", "列出文档", "什么文件", "什么文档",
                           "哪些文档", "哪些文件", "工作区有", "文档统计", "文件统计",
@@ -284,7 +368,7 @@ async def chat(
 
     history = await _get_history(session_id)
 
-    # Memory context (cached, 30min)
+    # 记忆上下文（缓存 30 分钟）
     mem_cache_key = f"mem:cache:{session_id}:{user_id}"
     memories = await cache.get_json(mem_cache_key)
     if memories is None:
@@ -292,9 +376,9 @@ async def chat(
         await cache.set_json(mem_cache_key, memories, ex=1800)
     memory_ctx = build_memory_context(memories)
 
-    # Build messages: system prompt + tools available
-    # Strip empty tool_calls from history (DeepSeek rejects tool_calls: [])
-    # Build LLM messages from a COPY -- keep original history intact for saving
+    # 构建消息：系统提示词 + 可用工具
+    # 从历史记录中剔除空 tool_calls（DeepSeek 拒绝 tool_calls: []）
+    # 从历史副本构建 LLM 消息，保留原始历史用于保存
     llm_history = []
     for h in history:
         hc = dict(h)
@@ -303,37 +387,29 @@ async def chat(
             del hc["tool_calls"]
         llm_history.append(hc)
 
-    user_prompt = build_history_prompt(history, message, [], kb_id=kb_id)
     history_budgeted = apply_token_budget(llm_history)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    # Inject current KB context so LLM knows which KB to query
-    messages.append({"role": "system", "content": f"当前知识库ID: {kb_id}。调用 doc_stats 或 search_knowledge_base 时必须使用此 kb_id。"})
+    # 注入当前知识库上下文，让 LLM 知道要检索哪个知识库
+    messages.append({"role": "system", "content": f"\u5f53\u524d\u77e5\u8bc6\u5e93ID: {kb_id}\u3002\u8c03\u7528 doc_stats \u6216 search_knowledge_base \u65f6\u5fc5\u987b\u4f7f\u7528\u6b64 kb_id\u3002"})
+    untrusted_parts = []
     if memory_ctx:
-        messages.append({"role": "system", "content": memory_ctx})
-    # GraphRAG: inject knowledge graph evidence if enabled
-    if enable_graphrag:
-        try:
-            from app.rag.graph_rag import retrieve_graph_evidence, format_graph_evidence
-            graph_evidence = retrieve_graph_evidence(query=message, kb_id=kb_id, max_evidence=8)
-            if graph_evidence:
-                graph_ctx = format_graph_evidence(graph_evidence)
-                if graph_ctx:
-                    messages.append({"role": "system", "content": graph_ctx})
-                    logger.info(f"GraphRAG: injected {len(graph_evidence)} evidence items")
-        except Exception as e:
-            logger.warning(f"GraphRAG evidence failed: {e}")
+        untrusted_parts.append("[\u957f\u671f\u8bb0\u5fc6]\n" + memory_ctx)
     for h in history_budgeted:
         messages.append(h)
-    messages.append({"role": "user", "content": user_prompt})
+    user_content = message
+    if untrusted_parts:
+        user_content += "\n\n<untrusted>\n" + "\n\n".join(untrusted_parts) + "\n</untrusted>"
+    messages.append({"role": "user", "content": user_content})
 
-    # Agent loop: LLM drives everything
+    # 智能体循环：由 LLM 驱动
     client = _get_deepseek_client()
-    answer, tool_msgs = await _agent_loop(client, messages, kb_id=kb_id, user_id=user_id)
+    answer, tool_msgs, usage = await _agent_loop(client, messages, kb_id=kb_id, user_id=user_id, enable_graphrag=enable_graphrag)
+    answer = _guard_output(answer)
 
-    # Extract sources from tool results for frontend display
+    # 从工具结果中提取来源，供前端展示
     sources = _extract_sources(tool_msgs)
 
-    # Save history (with tool calls for frontend display)
+    # 保存历史记录（含工具调用，供前端展示）
     tc_data = [tc.model_dump() for tc in _build_tool_call_events(tool_msgs)]
     history.append({"role": "user", "content": message})
     msg = {"role": "assistant", "content": answer}
@@ -342,36 +418,32 @@ async def chat(
     history.append(msg)
     await _set_history(session_id, history)
 
-    # Background tasks (fire-and-forget with error handling)
+    # 后台任务（启动后即忘，带错误处理）
     _background_task(cache.delete(mem_cache_key), "cache.delete(mem_cache_key)")
-    _background_task(_after_response_tasks(session_id, user_id, history), "after_response_tasks")
+    _background_thread(_after_response_tasks(session_id, user_id, history), "after_response_tasks")
 
     return ChatResponse(
         session_id=session_id,
         answer=answer,
         sources=sources,
         tool_calls=_build_tool_call_events(tool_msgs),
+        token_usage=usage,
     )
 
 
 
 def _yield_sources(stream_tool_calls: list) -> str:
-    """Extract sources from tool call results and yield __SOURCES__: JSON."""
+    """从工具调用结果提取来源，并输出 __SOURCES__: JSON。"""
     import json as _json
     sources_data = []
     for tc in stream_tool_calls:
         if tc.tool_name == "search_knowledge_base" and tc.result:
-            try:
-                res = _json.loads(tc.result) if isinstance(tc.result, str) else tc.result
-                results = res.get("results", []) if isinstance(res, dict) else []
-                for r in results:
-                    sources_data.append({
-                        "filename": r.get("filename", ""),
-                        "content": r.get("content", "")[:200],
-                        "score": r.get("score", 0.0),
-                    })
-            except Exception as ex:
-                    logger.warning(f"Failed to extract sources from {tc.tool_name}: {ex}")
+            for r in _extract_sources_from_result(tc.result):
+                sources_data.append({
+                    "filename": r.get("filename", ""),
+                    "content": r.get("content", "")[:200],
+                    "score": r.get("score", 0.0),
+                })
     logger.info(f"Yield sources: {len(sources_data)} items from {len(stream_tool_calls)} tool calls")
     return "__SOURCES__:" + _json.dumps(sources_data, ensure_ascii=False)
 
@@ -386,17 +458,18 @@ async def chat_stream(
     enable_graphrag: bool = True,
     user_id: str = "default",
 ) -> AsyncGenerator[str, None]:
-    """Streaming chat: uses agent loop with tool call events for frontend."""
+    """流式聊天：使用智能体循环并输出工具调用事件供前端展示。"""
+    t0 = time.perf_counter()
     history = await _get_history(session_id)
 
-    # Memory
+    # 记忆
     mem_cache_key = f"mem:cache:{session_id}:{user_id}"
     memories = await cache.get_json(mem_cache_key)
     if memories is None:
         memories = await retrieve_long_term_memory(query=message, user_id=user_id, top_k=3)
         await cache.set_json(mem_cache_key, memories, ex=1800)
     memory_ctx = build_memory_context(memories)
-    # Build LLM messages from a COPY -- keep original history intact for saving
+    # 从历史副本构建 LLM 消息，保留原始历史用于保存
     llm_history = []
     for h in history:
         hc = dict(h)
@@ -405,30 +478,21 @@ async def chat_stream(
             del hc["tool_calls"]
         llm_history.append(hc)
 
-    user_prompt = build_history_prompt(history, message, [], kb_id=kb_id)
     history_budgeted = apply_token_budget(llm_history)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    # Inject current KB context so LLM knows which KB to query
-    messages.append({"role": "system", "content": f"当前知识库ID: {kb_id}。调用 doc_stats 或 search_knowledge_base 时必须使用此 kb_id。"})
+    # 注入当前知识库上下文，让 LLM 知道要检索哪个知识库
+    messages.append({"role": "system", "content": f"\u5f53\u524d\u77e5\u8bc6\u5e93ID: {kb_id}\u3002\u8c03\u7528 doc_stats \u6216 search_knowledge_base \u65f6\u5fc5\u987b\u4f7f\u7528\u6b64 kb_id\u3002"})
+    untrusted_parts = []
     if memory_ctx:
-        messages.append({"role": "system", "content": memory_ctx})
-    # GraphRAG: inject knowledge graph evidence if enabled
-    if enable_graphrag:
-        try:
-            from app.rag.graph_rag import retrieve_graph_evidence, format_graph_evidence
-            graph_evidence = retrieve_graph_evidence(query=message, kb_id=kb_id, max_evidence=8)
-            if graph_evidence:
-                graph_ctx = format_graph_evidence(graph_evidence)
-                if graph_ctx:
-                    messages.append({"role": "system", "content": graph_ctx})
-                    logger.info(f"GraphRAG: injected {len(graph_evidence)} evidence items")
-        except Exception as e:
-            logger.warning(f"GraphRAG evidence failed: {e}")
+        untrusted_parts.append("[\u957f\u671f\u8bb0\u5fc6]\n" + memory_ctx)
     for h in history_budgeted:
         messages.append(h)
-    messages.append({"role": "user", "content": user_prompt})
+    user_content = message
+    if untrusted_parts:
+        user_content += "\n\n<untrusted>\n" + "\n\n".join(untrusted_parts) + "\n</untrusted>"
+    messages.append({"role": "user", "content": user_content})
 
-    # Use agent loop with tool call events
+    # 使用带工具调用事件的智能体循环
     from app.rag.agent_loop import agent_loop_stream
     client = _get_deepseek_client(timeout=120.0)
     tool_msgs = []
@@ -437,7 +501,7 @@ async def chat_stream(
     stream_tool_calls = []  # collect tool call info for history
 
     try:
-        async for chunk in agent_loop_stream(client, messages, user_id=user_id):
+        async for chunk in agent_loop_stream(client, messages, user_id=user_id, kb_id=kb_id, enable_graphrag=enable_graphrag):
             if chunk.startswith("__TOOL_CALL__:"):
                 try:
                     tc_data = json.loads(chunk[len("__TOOL_CALL__:"):])
@@ -451,15 +515,17 @@ async def chat_stream(
                     logger.warning(f"Failed to parse tool call: {ex}")
                 yield chunk
             elif chunk.startswith("__TOOL_RESULT__:"):
-                # Update last tool call with result
+                # 用结果更新最后一条工具调用
                 if stream_tool_calls:
                     try:
                         tr_data = json.loads(chunk[len("__TOOL_RESULT__:"):])
                         stream_tool_calls[-1].result = tr_data.get("result", "")[:8000]
+                        stream_tool_calls[-1].status = tr_data.get("status") or tool_result_status(tr_data.get("result", ""))
+                        stream_tool_calls[-1].sources = _extract_sources_from_result(tr_data.get("result", ""))
                     except Exception as ex:
                         logger.warning(f"Failed to parse tool result: {ex}")
                 yield chunk
-                # Yield sources incrementally so frontend sees them even if later calls fail
+                # 增量输出来源，即使后续调用失败前端也能看到
                 yield _yield_sources(stream_tool_calls)
             elif chunk.startswith("__REASONING__:"):
                 reasoning_content_acc += chunk[len("__REASONING__:"):]
@@ -467,10 +533,11 @@ async def chat_stream(
                 full_answer += chunk
                 yield chunk
 
-        # Final sources yield (after all tool results processed)
+        # 最终输出来源（在所有工具结果处理完之后）
         yield _yield_sources(stream_tool_calls)
 
-        # Save history with tool calls
+        # 保存带工具调用的历史记录
+        full_answer = _guard_output(full_answer)
         tc_list = [tc.model_dump() for tc in stream_tool_calls]
         history.append({"role": "user", "content": message})
         msg = {"role": "assistant", "content": full_answer}
@@ -480,13 +547,17 @@ async def chat_stream(
             msg["tool_calls"] = tc_list
         history.append(msg)
         await _set_history(session_id, history)
+        logger.info(
+            f"Chat stream {session_id[:12]}: total={time.perf_counter()-t0:.2f}s "
+            f"tools={len(stream_tool_calls)} chars={len(full_answer)}"
+        )
 
-        # Background (fire-and-forget with error handling)
+        # 后台任务（启动后即忘，带错误处理）
         _background_task(cache.delete(mem_cache_key), "cache.delete(mem_cache_key)")
-        _background_task(_after_response_tasks(session_id, user_id, history), "after_response_tasks")
+        _background_thread(_after_response_tasks(session_id, user_id, history), "after_response_tasks")
     except Exception as e:
         logger.error(f"Stream error: {e}")
-        # Yield any sources we have before sending the error
+        # 发送错误前先输出已收集的来源
         yield _yield_sources(stream_tool_calls)
         yield f"AI 服务暂时不可用: {str(e)}"
 
@@ -496,7 +567,7 @@ async def get_chat_history(session_id: str) -> list[dict]:
 
 
 async def get_chat_history_paginated(session_id: str, offset: int = 0, limit: int = 20):
-    """Returns (messages, has_more) for infinite scroll."""
+    """返回 (消息列表, 是否还有更多)，用于无限滚动。"""
     import asyncio
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, lambda: load_history_paginated(session_id, offset, limit))

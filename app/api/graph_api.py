@@ -1,8 +1,8 @@
-"""Graph visualization API: returns entity-relation data for vis-network"""
+"""图谱可视化 API：返回用于 vis-network 的实体关系数据"""
 from __future__ import annotations
 import logging
 from fastapi import APIRouter, Query
-from app.rag.graph_rag import _get_driver
+from app.rag.graph_rag import _get_driver, _neo4j_database, EXTRACTION_PROMPT
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -15,8 +15,8 @@ async def get_graph_data(
     search: str = Query(""),
     limit: int = Query(100),
 ):
-    """Return a closed subgraph: edges are complete for the returned node set."""
-    driver = _get_driver()
+    """返回封闭子图：返回节点集合的边是完整的。"""
+    driver = _get_driver(force_check=True)
     if not driver:
         return {"nodes": [], "edges": [], "kb_id": kb_id, "total_entities": 0, "total_relations": 0, "isolated_count": 0}
     limit = max(1, min(limit, 500))
@@ -24,8 +24,8 @@ async def get_graph_data(
     edges = []
     node_ids = []
 
-    with driver.session(database=settings.neo4j_database) as session:
-        # Get entities (nodes)
+    with driver.session(database=_neo4j_database()) as session:
+        # 获取实体（节点）
         if search:
             result = session.run(
                 """
@@ -80,7 +80,7 @@ async def get_graph_data(
         if not node_ids:
             return {"nodes": [], "edges": [], "kb_id": kb_id, "total_entities": 0, "total_relations": 0, "isolated_count": 0}
 
-        # Fetch node properties for the selected node set.
+        # 获取选定节点集合的属性。
         result = session.run(
             """
             MATCH (e:Entity {kb_id: $kb_id})
@@ -104,7 +104,7 @@ async def get_graph_data(
                 "color": _type_color(e.get("type", "")),
             })
 
-        # All RELATES_TO edges whose endpoints are both in the node set.
+        # 所有两端都在节点集合内的 RELATES_TO 边。
         result = session.run(
             """
             MATCH (a:Entity {kb_id: $kb_id})-[r:RELATES_TO]->(b:Entity {kb_id: $kb_id})
@@ -127,7 +127,7 @@ async def get_graph_data(
                 "arrows": "to",
             })
 
-        # All co-occurrence edges whose endpoints are both in the node set.
+        # 所有两端都在节点集合内的共现边。
         result = session.run(
             """
             MATCH (a:Entity {kb_id: $kb_id})-[:MENTIONED_IN]->(c:Chunk {kb_id: $kb_id})<-[:MENTIONED_IN]-(b:Entity {kb_id: $kb_id})
@@ -159,7 +159,7 @@ async def get_graph_data(
 
 
 def _type_color(entity_type: str) -> str:
-    """Map entity type to a color for the graph."""
+    """将实体类型映射为图谱颜色。"""
     type_lower = entity_type.lower()
     if any(k in type_lower for k in ["模型", "model", "llm"]):
         return "#3b82f6"  # blue
@@ -178,7 +178,7 @@ def _type_color(entity_type: str) -> str:
 
 @router.get("/stats")
 async def get_graph_stats(kb_id: str = Query("default")):
-    """Return graph statistics."""
+    """返回图谱统计信息。"""
     from app.rag.graph_rag import graph_stats
     return graph_stats(kb_id)
 
@@ -189,7 +189,7 @@ async def build_graph(
     kb_id: str = Query("default"),
     max_chunks: int = Query(50),
 ):
-    """Build knowledge graph from existing Qdrant chunks for a given kb_id."""
+    """根据指定知识库已有的 Qdrant 分块构建知识图谱。"""
     import asyncio, concurrent.futures
     loop = asyncio.get_running_loop()
     loop.run_in_executor(None, _build_graph_task_sync, kb_id, max_chunks)
@@ -208,14 +208,14 @@ def _build_graph_task_sync(kb_id: str, max_chunks: int):
         loop.close()
 
 async def _build_graph_task(kb_id: str, max_chunks: int):
-    """Full graph build: clear old, process all chunks, batch-flush to Neo4j."""
+    """完整图谱构建：清空旧数据、处理全部分块、批量写入 Neo4j。"""
     import asyncio, json as _json, re as _re, httpx as _httpx
     from openai import OpenAI
     from qdrant_client import QdrantClient
     from app.rag.graph_rag import delete_kb_graph, graph_stats, _get_driver, _safe_neo4j_value
+    from app.core.user_settings import chat_config
 
-    delete_kb_graph(kb_id)
-    logger.info("Graph build: cleared kb=%s", kb_id)
+
 
     client = QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port, check_compatibility=False)
     all_chunks = []
@@ -237,7 +237,19 @@ async def _build_graph_task(kb_id: str, max_chunks: int):
     total = len(to_process)
     logger.info("Graph build: %d chunks, kb=%s", total, kb_id)
 
-    llm = OpenAI(base_url=settings.deepseek_base_url, api_key=settings.deepseek_api_key, timeout=_httpx.Timeout(60.0, connect=10.0))
+    cfg = chat_config()
+    llm = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=_httpx.Timeout(60.0, connect=10.0))
+    # Verify the extraction model before clearing the old graph.
+    try:
+        probe_txt = to_process[0].payload.get("content", "")[:3000]
+        probe_prompt = EXTRACTION_PROMPT.replace("{chunk_text}", probe_txt or "test")
+        llm.chat.completions.create(model=cfg["model"], messages=[{"role":"user","content":probe_prompt}], temperature=0.3, max_tokens=64)
+    except Exception as e:
+        logger.warning("Graph build aborted before clearing old graph: %s", e)
+        return
+
+    delete_kb_graph(kb_id)
+    logger.info("Graph build: cleared kb=%s", kb_id)
 
     BATCH = 25
     ent_buf = []
@@ -252,12 +264,8 @@ async def _build_graph_task(kb_id: str, max_chunks: int):
         cid = f"{did}:{cidx}"
 
         try:
-            prompt = ("你是知识图谱专家。从文档提取实体和关系。\n"
-                "JSON格式: {\"entities\":[{\"name\":\"实体\",\"type\":\"概念/技术/模型/工具/框架/算法/架构\",\"description\":\"描述\"}],"
-                "\"relations\":[{\"source\":\"源\",\"target\":\"目标\",\"relation\":\"包含/使用/依赖/实现/对比/属于/改进\",\"description\":\"描述\"}]}\n"
-                "规则: 提取所有技术实体, 最多30个, 关系最多15条。relations的source/target必须严格等于entities中出现的name。关系有明确依据。无实体返回空。\n"
-                "片段:\n" + txt[:3000])
-            resp = llm.chat.completions.create(model=settings.graphrag_llm_model, messages=[{"role":"user","content":prompt}], temperature=0.3, max_tokens=2048)
+            prompt = EXTRACTION_PROMPT.replace("{chunk_text}", txt[:3000])
+            resp = llm.chat.completions.create(model=cfg["model"], messages=[{"role":"user","content":prompt}], temperature=0.3, max_tokens=2048)
             raw = resp.choices[0].message.content.strip()
             m = _re.search(r"\{[\s\S]*\}", raw)
             if m:
@@ -284,11 +292,11 @@ async def _build_graph_task(kb_id: str, max_chunks: int):
 
 
 def _flush_graph_batch(ent_buf, rel_buf, kb_id):
-    """Batch flush entities+relations to Neo4j."""
+    """批量将实体和关系写入 Neo4j。"""
     from app.rag.graph_rag import _get_driver, _safe_neo4j_value as _sv, normalize_entity_name as _norm
-    driver = _get_driver()
+    driver = _get_driver(force_check=True)
     if not driver: return
-    with driver.session(database=settings.neo4j_database) as session:
+    with driver.session(database=_neo4j_database()) as session:
         seen = {}
         for ent, ct, cid, did in ent_buf:
             raw_nm = ent.get("name", "")

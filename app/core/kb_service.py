@@ -1,5 +1,6 @@
-"""Knowledge Base management service"""
+"""知识库管理服务"""
 from __future__ import annotations
+import json
 import uuid
 import logging
 from datetime import datetime, UTC
@@ -15,21 +16,53 @@ logger = logging.getLogger(__name__)
 KB_LIST_KEY = "kb:list"
 KB_KEY_PREFIX = "kb:"
 
-# Default KB created at startup
+# 启动时创建的默认知识库
 DEFAULT_KB_ID = "default"
 
 
+def _kb_file() -> Path:
+    return Path(settings.data_dir) / "kbs.json"
+
+
+async def _save_kb_file(kbs: list[dict]):
+    try:
+        _kb_file().parent.mkdir(parents=True, exist_ok=True)
+        _kb_file().write_text(json.dumps(kbs, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"Failed to persist KB list to file: {e}")
+
+
+async def _load_kb_list_raw() -> list[dict]:
+    try:
+        data = await cache.get_json(KB_LIST_KEY)
+    except Exception:
+        data = None
+    if data:
+        return data
+    try:
+        if _kb_file().exists():
+            data = json.loads(_kb_file().read_text(encoding="utf-8"))
+            if data:
+                await cache.set_json(KB_LIST_KEY, data)
+                for item in data:
+                    await cache.set_json(f"{KB_KEY_PREFIX}{item.get('id', '')}", item)
+                return data
+    except Exception:
+        pass
+    return []
+
+
 async def get_kb_list() -> list[KnowledgeBase]:
-    """Get all knowledge bases with real-time doc counts from Qdrant."""
-    data = await cache.get_json(KB_LIST_KEY)
+    """获取所有知识库，并实时从 Qdrant 刷新文档数。"""
+    data = await _load_kb_list_raw()
     if not data:
         await _create_default_kb()
-        data = await cache.get_json(KB_LIST_KEY) or []
+        data = await _load_kb_list_raw() or []
     kbs = []
     for item in data:
         try:
             kb = KnowledgeBase(**item)
-            # Refresh doc count from Qdrant
+            # 从 Qdrant 刷新文档数
             await update_kb_doc_count(kb.id)
             refreshed = await get_kb(kb.id)
             if refreshed:
@@ -42,25 +75,38 @@ async def get_kb_list() -> list[KnowledgeBase]:
 
 
 async def get_kb(kb_id: str) -> Optional[KnowledgeBase]:
-    """Get a single knowledge base by ID."""
-    raw = await cache.get_json(f"{KB_KEY_PREFIX}{kb_id}")
+    """按 ID 获取单个知识库。"""
+    try:
+        raw = await cache.get_json(f"{KB_KEY_PREFIX}{kb_id}")
+    except Exception:
+        raw = None
     if raw:
         return KnowledgeBase(**raw)
+    try:
+        if _kb_file().exists():
+            data = json.loads(_kb_file().read_text(encoding="utf-8"))
+            for item in data:
+                if item.get("id") == kb_id:
+                    await cache.set_json(f"{KB_KEY_PREFIX}{kb_id}", item)
+                    return KnowledgeBase(**item)
+    except Exception:
+        pass
     return None
 
 
 async def create_kb(data: KnowledgeBaseCreate) -> KnowledgeBase:
-    """Create a new knowledge base."""
+    """创建新知识库。"""
     kb_id = str(uuid.uuid4())[:12]
     kb = KnowledgeBase(id=kb_id, name=data.name, description=data.description)
 
-    # Persist to cache
+    # 写入缓存
     await cache.set_json(f"{KB_KEY_PREFIX}{kb_id}", kb.model_dump(mode="json"))
     kbs = await _load_kb_list_raw()
     kbs.append(kb.model_dump(mode="json"))
     await cache.set_json(KB_LIST_KEY, kbs)
+    await _save_kb_file(kbs)
 
-    # Create file storage directory
+    # 创建文件存储目录
     (Path(settings.data_dir) / "documents" / kb_id).mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Created KB: {kb_id} ({data.name})")
@@ -68,34 +114,35 @@ async def create_kb(data: KnowledgeBaseCreate) -> KnowledgeBase:
 
 
 async def delete_kb(kb_id: str) -> bool:
-    """Delete a knowledge base and all its data."""
-    if kb_id == DEFAULT_KB_ID:
-        raise ValueError("Cannot delete default knowledge base")
-
+    """删除知识库及其全部数据。"""
     kb = await get_kb(kb_id)
     if not kb:
         return False
 
-    # Delete from Qdrant
+    kbs = await _load_kb_list_raw()
+    if len(kbs) <= 1:
+        raise ValueError("至少保留一个知识库")
+
+    # 从 Qdrant 删除
     from app.core import vector_store
     try:
         vector_store.delete_collection(kb_id)
     except Exception as e:
         logger.warning(f"Failed to delete Qdrant collection for {kb_id}: {e}")
 
-    # Delete Redis keys
+    # 删除 Redis 键
     await cache.delete(f"{KB_KEY_PREFIX}{kb_id}")
-    # Delete all doc task keys
+    # 删除所有文档任务键
     doc_keys = await cache.keys(f"kb:{kb_id}:doc:*")
     for k in doc_keys:
         await cache.delete(k)
 
-    # Remove from list
-    kbs = await _load_kb_list_raw()
+    # 从列表中移除
     kbs = [k for k in kbs if k.get("id") != kb_id]
     await cache.set_json(KB_LIST_KEY, kbs)
+    await _save_kb_file(kbs)
 
-    # Delete file directory
+    # 删除文件目录
     import shutil
     kb_dir = Path(settings.data_dir) / "documents" / kb_id
     if kb_dir.exists():
@@ -106,7 +153,7 @@ async def delete_kb(kb_id: str) -> bool:
 
 
 async def update_kb(kb_id: str, data) -> Optional[KnowledgeBase]:
-    """Update a knowledge base's name and/or description."""
+    """更新知识库名称或描述。"""
     from app.models.kb import KnowledgeBaseUpdate
     kb = await get_kb(kb_id)
     if not kb:
@@ -130,12 +177,13 @@ async def update_kb(kb_id: str, data) -> Optional[KnowledgeBase]:
             kbs[i] = kb.model_dump(mode="json")
             break
     await cache.set_json(KB_LIST_KEY, kbs)
+    await _save_kb_file(kbs)
 
     logger.info(f"Updated KB: {kb_id}")
     return kb
 
 async def update_kb_doc_count(kb_id: str):
-    """Refresh kb doc count from actual files on disk."""
+    """根据磁盘上的实际文件刷新知识库文档数。"""
     from pathlib import Path
     doc_count = 0
     try:
@@ -156,13 +204,9 @@ async def _create_default_kb():
     kb = KnowledgeBase(id=DEFAULT_KB_ID, name="默认知识库", description="系统默认知识库")
     await cache.set_json(f"{KB_KEY_PREFIX}{DEFAULT_KB_ID}", kb.model_dump(mode="json"))
     await cache.set_json(KB_LIST_KEY, [kb.model_dump(mode="json")])
+    await _save_kb_file([kb.model_dump(mode="json")])
     (Path(settings.data_dir) / "documents" / DEFAULT_KB_ID).mkdir(parents=True, exist_ok=True)
     logger.info("Default KB created")
-
-
-async def _load_kb_list_raw() -> list[dict]:
-    data = await cache.get_json(KB_LIST_KEY)
-    return data if data else []
 
 
 def get_doc_dir(kb_id: str) -> Path:

@@ -1,5 +1,5 @@
 import sys, os
-os.chdir(r"E:\aProgramming_code\GetAJobProject\企业知识库搭建")
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.getcwd())
 
 import pytest
@@ -68,6 +68,25 @@ def test_parse_unknown_format():
             parse_document(p)
     finally:
         p.unlink(missing_ok=True)
+
+
+def test_extract_pdf_tables_uses_cell_text():
+    from app.core.document_parser import extract_pdf_tables
+
+    class FakeTable:
+        bbox = (0, 0, 100, 100)
+
+        def extract(self):
+            return [["标题 A", "标题 B"], ["1", "2"]]
+
+    class FakePage:
+        def find_tables(self):
+            return [FakeTable()]
+
+    tables = extract_pdf_tables(FakePage())
+    assert len(tables) == 1
+    assert tables[0]["headers"] == ["标题 A", "标题 B"]
+    assert tables[0]["rows"] == [["1", "2"]]
 
 # ============================================================
 # Reranker tests

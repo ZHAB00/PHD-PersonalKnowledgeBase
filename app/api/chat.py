@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 from fastapi import APIRouter, HTTPException, Form, Request
 from fastapi.responses import StreamingResponse
 from app.models.chat import ChatRequest, ChatResponse
@@ -8,13 +9,13 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
 def _get_user_id(request: Request, fallback: str = "default") -> str:
-    """Extract user_id from auth middleware or fallback to param."""
+    """从鉴权中间件获取 user_id，缺失时回退到参数。"""
     return getattr(request.state, "user_id", fallback)
 
 
 @router.post("/rag", response_model=ChatResponse)
 async def chat_rag(chat_req: ChatRequest, request: Request):
-    """RAG chat endpoint — same as /send, kept for frontend compatibility."""
+    """RAG 聊天接口 —— 与 /send 相同，保留给前端兼容。"""
     if not chat_req.message.strip():
         raise HTTPException(400, "消息不能为空")
     return await chat(
@@ -57,8 +58,8 @@ async def send_message_stream(
 
     async def generate():
         async for chunk in chat_stream(session_id, message, kb_id, tenant_id, top_k, rerank_strategy, graphrag_enabled, effective_user):
-            yield f"data: {chunk}\n\n"
-        yield "data: [DONE]\n\n"
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps('[DONE]', ensure_ascii=False)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -66,16 +67,16 @@ async def send_message_stream(
 
 @router.post("/title")
 async def generate_title(data: dict):
-    """Generate a short title from the first user message using AI."""
+    """使用 AI 根据首条用户消息生成简短标题。"""
     session_id = data.get("session_id", "")
     message = data.get("message", "")
-    from openai import OpenAI
+    from openai import AsyncOpenAI
     from app.config import settings
 
-    client = OpenAI(base_url=settings.deepseek_base_url, api_key=settings.deepseek_api_key)
+    client = AsyncOpenAI(base_url=settings.deepseek_base_url, api_key=settings.deepseek_api_key)
     try:
-        resp = client.chat.completions.create(
-            model="deepseek-chat",  # non-thinking model for short title generation
+        resp = await client.chat.completions.create(
+            model=settings.deepseek_model,  # 与 .env/设置中的对话模型保持一致
             messages=[
                 {"role": "system", "content": "用15个字以内总结以下用户消息作为对话标题，只返回标题文本，不要引号和其他内容"},
                 {"role": "user", "content": message[:200]},
@@ -84,11 +85,11 @@ async def generate_title(data: dict):
             max_tokens=50,
         )
         title = resp.choices[0].message.content.strip()
-        # Clean up: remove quotes, truncate
+        # 清理引号并截断
         import re; title = re.sub(r'[#*_`~>|]', '', title).replace('"', '').replace("'", '').strip()
         if len(title) > 20:
             title = title[:20]
-        # Save title to sessions table
+        # 保存标题到会话表
         try:
             from app.core.chat_store import save_session
             save_session(session_id, title, "default")
@@ -96,7 +97,7 @@ async def generate_title(data: dict):
             pass
         return {"title": title or "???"}
     except Exception as e:
-        # Fallback: use first 15 chars of message
+        # 回退方案：使用消息前 15 个字符
         fallback = message[:15].replace("\n", " ")
         try:
             from app.core.chat_store import save_session

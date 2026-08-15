@@ -15,8 +15,9 @@ class ToolCallEvent(BaseModel):
     """单次工具调用事件，用于前端展示"""
     tool_name: str
     arguments: dict = Field(default_factory=dict)
-    result: str = ""  # truncated result for display
+    result: str = ""  # 截断后的结果，用于展示
     status: str = "ok"  # ok / error
+    sources: list[dict] = Field(default_factory=list)
 
 
 class ChatRequest(BaseModel):

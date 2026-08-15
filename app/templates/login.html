@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>企业知识库 - 登录</title>
+<title>PDH-PKG - 登录</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -78,9 +78,9 @@
 </head>
 <body>
 <div class="login-card">
-  <h1>企业知识库</h1>
+  <h1>PDH-PKG</h1>
   <p class="subtitle">请登录以继续</p>
-  <div class="form-group">
+  <div class="form-group" id="usernameGroup">
     <label>用户名</label>
     <input type="text" id="username" class="form-input" placeholder="请输入用户名" autocomplete="username">
   </div>
@@ -98,29 +98,55 @@
   const passwordEl = document.getElementById("password");
   const btnLogin = document.getElementById("btnLogin");
   const errorMsg = document.getElementById("errorMsg");
+  let requirePassword = false;
 
-  // Check if already logged in
-  const token = localStorage.getItem("kb_token");
-  if (token) {
-    fetch("/api/auth/me", { headers: { "Authorization": "Bearer " + token } })
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then(() => { window.location.href = "/"; })
-      .catch(() => { localStorage.removeItem("kb_token"); });
+  function setAuth(data) {
+    localStorage.setItem("kb_token", data.access_token);
+    localStorage.setItem("kb_username", data.username || "local");
+    localStorage.setItem("kb_user_id", data.user_id || "local");
+    window.location.href = "/";
   }
 
+  function initAuth() {
+    const token = localStorage.getItem("kb_token");
+    if (token) {
+      fetch("/api/auth/me", { headers: { "Authorization": "Bearer " + token } })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(() => { window.location.href = "/"; })
+        .catch(() => { localStorage.removeItem("kb_token"); });
+      return;
+    }
+    if (!requirePassword) {
+      fetch("/api/auth/local-token").then(r => r.json()).then(d => {
+        if (d && d.access_token) setAuth(d);
+        else window.location.href = "/login";
+      }).catch(() => {});
+    }
+  }
+
+  fetch("/api/settings/public").then(r => r.json()).then(s => {
+    requirePassword = !!s.require_password;
+    if (requirePassword) {
+      document.getElementById("usernameGroup").style.display = "none";
+      btnLogin.textContent = "进入";
+    }
+    initAuth();
+  }).catch(() => initAuth());
+
   async function doLogin() {
-    const username = usernameEl.value.trim();
     const password = passwordEl.value;
-    if (!username || !password) return;
+    if (!password) return;
 
     btnLogin.disabled = true;
     errorMsg.classList.remove("show");
 
     try {
-      const resp = await fetch("/api/auth/login", {
+      const endpoint = requirePassword ? "/api/auth/login-local" : "/api/auth/login";
+      const body = requirePassword ? { password } : { username: usernameEl.value.trim(), password };
+      const resp = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify(body),
       });
       const data = await resp.json();
       if (!resp.ok) {
@@ -129,10 +155,7 @@
         btnLogin.disabled = false;
         return;
       }
-      localStorage.setItem("kb_token", data.access_token);
-      localStorage.setItem("kb_username", data.username);
-      localStorage.setItem("kb_user_id", data.user_id);
-      window.location.href = "/";
+      setAuth(data);
     } catch (e) {
       errorMsg.textContent = "网络错误，请重试";
       errorMsg.classList.add("show");

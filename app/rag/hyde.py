@@ -1,17 +1,16 @@
-"""HyDE (Hypothetical Document Embeddings) query enhancement
+"""HyDE（假设文档向量）查询增强
 
-Reference (RAG Best Practices Section 6.6):
-  HyDE generates a hypothetical answer/document from the query,
-  then uses it for retrieval to bridge the semantic gap between
-  short queries and document chunks.
+参考（RAG 最佳实践 6.6）：
+  HyDE 根据查询生成假设回答/文档，
+  再用于检索，以弥合短查询与文档分块之间的语义差距。
 
-Trigger conditions:
-  1. Query length < threshold (short/ambiguous queries)
-  2. First-pass retrieval max score < threshold (low confidence)
+触发条件：
+  1. 查询长度低于阈值（短/模糊查询）
+  2. 首轮检索最高分低于阈值（低置信度）
 
-When triggered, LLM generates a "hypothetical document passage"
-that would answer the query. This passage is embedded and used
-as an additional retrieval query, fused via RRF with the original.
+触发后，LLM 生成一段“假设文档内容”
+来回答查询。这段内容被向量化后作为额外检索条件，
+并与原始查询通过 RRF 融合。
 """
 from __future__ import annotations
 import logging
@@ -24,11 +23,11 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Trigger thresholds
+# 触发阈值
 HYDE_MIN_QUERY_LENGTH = 10   # chars: trigger for short queries
 HYDE_MIN_SCORE = 0.55        # cosine: trigger when best score below this
 
-# HyDE prompt template
+# HyDE 提示词模板
 HYDE_PROMPT = """You are a helpful assistant. Given a user question, write a short passage (2-4 sentences) that a relevant document might contain to answer this question. Write it as if you are the document itself, in the same language as the question. Do NOT answer the question directly - write what the document would say.
 
 Question: {query}
@@ -37,9 +36,9 @@ Document passage:"""
 
 
 async def generate_hypothetical_doc(query: str) -> Optional[str]:
-    """Use LLM to generate a hypothetical document passage for the query.
+    """使用 LLM 为查询生成假设文档内容。
 
-    Returns None if generation fails (API error, timeout, etc.)
+    生成失败（API 错误、超时等）时返回 None。
     """
     try:
         client = OpenAI(
@@ -69,11 +68,11 @@ async def should_trigger_hyde(
     min_query_len: int = HYDE_MIN_QUERY_LENGTH,
     min_score: float = HYDE_MIN_SCORE,
 ) -> bool:
-    """Determine if HyDE should be triggered based on query length and best retrieval score.
+    """根据查询长度和最佳检索分数判断是否触发 HyDE。
 
-    Returns True when EITHER condition is met:
-      1. Query is short (< min_query_len chars)
-      2. Best retrieval score is below threshold
+    满足任一条件时返回 True：
+      1. 查询过短（少于 min_query_len 个字符）
+      2. 最佳检索分数低于阈值
     """
     query_short = len(query.strip()) < min_query_len
     score_low = best_score < min_score

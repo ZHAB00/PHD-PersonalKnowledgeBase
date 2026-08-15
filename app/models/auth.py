@@ -1,4 +1,4 @@
-"""Auth models"""
+"""认证模型"""
 from __future__ import annotations
 from pydantic import BaseModel
 

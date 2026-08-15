@@ -59,14 +59,10 @@ function show(id, text) {
 
 function log(msg) { console.log(msg); }
 
-// Auth
+  // 认证
 document.getElementById("btnLogin").addEventListener("click", async function() {
   try {
-    var resp = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({username:"admin",password:"admin123"})
-    });
+    var resp = await fetch("/api/auth/local-token");
     var data = await resp.json();
     token = data.access_token;
     document.getElementById("loginResult").textContent = "OK: " + data.username;
@@ -77,7 +73,7 @@ document.getElementById("btnLogin").addEventListener("click", async function() {
   }
 });
 
-// KB List
+  // 知识库列表
 document.getElementById("btnKbList").addEventListener("click", async function() {
   try {
     var resp = await fetch("/api/kb/list?tenant_id=default", {
@@ -90,7 +86,7 @@ document.getElementById("btnKbList").addEventListener("click", async function() 
   }
 });
 
-// Docs
+  // 文档
 document.getElementById("btnDocs").addEventListener("click", async function() {
   try {
     var resp = await fetch("/api/documents/list?kb_id=default&tenant_id=default", {
@@ -103,7 +99,7 @@ document.getElementById("btnDocs").addEventListener("click", async function() {
   }
 });
 
-// Session
+  // 会话
 document.getElementById("btnNewSession").addEventListener("click", function() {
   sessionId = "test_" + Date.now();
   document.getElementById("sessionId").textContent = "session: " + sessionId;
@@ -111,7 +107,7 @@ document.getElementById("btnNewSession").addEventListener("click", function() {
 
 document.getElementById("sessionId").textContent = "session: " + sessionId;
 
-// Chat
+  // 聊天
 document.getElementById("btnChat").addEventListener("click", async function() {
   var msg = document.getElementById("chatInput").value.trim();
   if (!msg) return;

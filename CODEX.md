@@ -1,4 +1,4 @@
-# 企业知识库搭建 — Codex 项目指令
+# PDH-PKG — Codex 项目指令
 
 ## 技术栈
 
@@ -38,7 +38,7 @@
 `
 
 ### 用户隔离
-- JWT 登录 (admin/admin123, user/user123)
+- JWT 登录（开发默认 admin/admin123，生产通过 `PRESET_USERS` 覆盖）
 - AuthMiddleware 注入 
 equest.state.user_id
 - 对话/记忆/tool 调用全部按 user_id 隔离
@@ -54,7 +54,7 @@ equest.state.user_id
 uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 
 # 测试
-E:\anaconda3\envs\enterprise_kb\python.exe -m pytest tests/ -v --tb=short
+python -m pytest tests/ -v --tb=short
 `
 
 ## 文件地图

@@ -1,4 +1,4 @@
-# 企业知识库 API 接口文档
+# PDH-PKG API 接口文档
 
 > 版本 v2.0.0 | Base URL: `http://localhost:8001`
 
@@ -12,12 +12,12 @@
 Authorization: Bearer <access_token>
 ```
 
-未登录或 token 过期时，后端自动降级为 `user_id="default"` 匿名用户。预设账号：
+未登录或 token 过期时，后端自动降级为 `user_id="default"` 匿名用户。预设账号（仅开发默认，生产必须通过 `PRESET_USERS` 修改）：
 
-| 用户名 | 密码 | 角色 |
-|--------|------|------|
-| admin | admin123 | 管理员 |
-| user | user123 | 普通用户 |
+| 用户名 | 密码 |
+|--------|------|
+| admin | admin123 |
+| user | user123 |
 
 可在 `.env` 中通过 `preset_users` 配置修改。
 
@@ -31,7 +31,7 @@ Authorization: Bearer <access_token>
 
 **响应 200:**
 ```json
-{"status": "ok", "service": "企业知识库"}
+{"status": "ok", "service": "PDH-PKG"}
 ```
 
 ---
@@ -44,7 +44,7 @@ Authorization: Bearer <access_token>
 ```json
 {
   "username": "admin",
-  "password": "admin123"
+  "password": "<your-password>"
 }
 ```
 

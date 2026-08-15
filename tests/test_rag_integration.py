@@ -1,5 +1,5 @@
 import sys, os
-os.chdir(r"E:\aProgramming_code\GetAJobProject\企业知识库搭建")
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.getcwd())
 
 import pytest

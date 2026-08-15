@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "agent_eval/schemas/trace.schema.json",
+  "title": "Trace",
+  "description": "Agent 执行轨迹格式（对应《agent评估指标体系.md》§5.3 轨迹评估）",
+  "type": "object",
+  "required": ["task_id", "question"],
+  "properties": {
+    "trace_id": {"type": "string", "description": "轨迹唯一 id"},
+    "task_id": {"type": "string"},
+    "run_index": {"type": "integer", "minimum": 0, "default": 0, "description": "同任务第几次运行（一致性 M16 / 一次性通过 M3）"},
+    "question": {"type": "string"},
+    "final_answer": {"type": "string", "default": ""},
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "kind"],
+        "properties": {
+          "index": {"type": "integer"},
+          "kind": {"type": "string", "enum": ["tool_call", "reasoning", "final_answer"]},
+          "tool": {
+            "type": ["object", "null"],
+            "properties": {
+              "tool_name": {"type": "string"},
+              "arguments": {"type": "object"},
+              "status": {"type": "string", "enum": ["ok", "error", "timeout"], "default": "ok"},
+              "result_preview": {"type": "string", "default": ""},
+              "result": {"type": "string", "default": ""}
+            }
+          },
+          "content": {"type": "string", "default": ""}
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "description": "检索来源（doc_id/filename/content/score/page_number/chunk_index）",
+      "items": {"type": "object"}
+    },
+    "citations": {
+      "type": "array",
+      "description": "回答中的 [n]/【n】 引用标记",
+      "items": {
+        "type": "object",
+        "properties": {
+          "marker": {"type": "string"},
+          "text": {"type": "string"}
+        }
+      }
+    },
+    "token_usage": {
+      "type": "object",
+      "description": "prompt_tokens / completion_tokens / total_tokens（兼容 input/output 键）"
+    },
+    "latency_ms": {"type": "integer", "minimum": 0, "default": 0},
+    "status": {"type": "string", "enum": ["completed", "timeout", "error", "max_steps"], "default": "completed"},
+    "error": {"type": "string", "default": ""}
+  },
+  "additionalProperties": true
+}
