@@ -1,4 +1,4 @@
-# agent_eval —— PDH-PKG Agent 性能评估工具包
+﻿# agent_eval —— PDH-PKG Agent 性能评估工具包
 
 对应设计文档 **《agent评估指标体系.md》** 的可执行落地，实现 M1–M32 指标中的离线可算部分。
 
@@ -64,7 +64,7 @@ python -m agent_eval report \
 ### 4. 单元测试
 
 ```bash
-python -m pytest tests/test_agent_eval.py -q
+python -m pytest -c tests/pytest.ini tests/test_agent_eval.py -q
 ```
 
 ### 5. CI / 发版门禁

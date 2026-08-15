@@ -153,7 +153,7 @@ python -m agent_eval history
 ## 开发与测试
 
 ```powershell
-python -m pytest -q -p no:cacheprovider --basetemp=.pytest_tmp
+python -m pytest tests -q -p no:cacheprovider --basetemp=.pytest_tmp
 ```
 
 调试模式与正式模式配置隔离：
