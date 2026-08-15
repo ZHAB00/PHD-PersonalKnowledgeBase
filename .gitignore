@@ -67,8 +67,8 @@ _write_prompts.py
 app/static/js/BUILD_HTML.txt
 app/templates/_test.html
 
-# 开源前请人工检查/替换：界面截图可能包含个人数据
-landing/assets/screens/
+# landing 已部署到云服务器，不在 GitHub 维护
+landing/
 
 # Installer resources downloaded on demand
 packaging/resources/models/
