@@ -179,15 +179,19 @@
       l.sort(function(a,b) { return (b.updated||0) - (a.updated||0); });
       ssl(l);
       if (sid === state.sessionId) {
-        state.sessionId = l.length > 0 ? l[0].id : gid();
-        localStorage.setItem("kb_session_id", state.sessionId);
-        var cm = document.getElementById("chatMessages");
-        if (cm) {
-          cm.querySelectorAll(".session-view").forEach(function(v) {
-            v.style.display = (v.getAttribute("data-sid") === state.sessionId) ? "" : "none";
-          });
+        if (l.length > 0) {
+          state.sessionId = l[0].id;
+          localStorage.setItem("kb_session_id", state.sessionId);
+          var cm = document.getElementById("chatMessages");
+          if (cm) {
+            cm.querySelectorAll(".session-view").forEach(function(v) {
+              v.style.display = (v.getAttribute("data-sid") === state.sessionId) ? "" : "none";
+            });
+          }
+          lch();
+        } else {
+          showNoSession();
         }
-        lch();
       }
       rsl();
     });
@@ -203,6 +207,16 @@
     view.style.display = "";
     view.innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><p>开始一段新的对话吧</p><p class="chat-empty-hint">在下方输入你的问题，AI 会基于知识库为你解答</p></div>';
     uts(state.sessionId); rsl(); scv(); $("chatInput").focus();
+  }
+
+  function showNoSession() {
+    state.sessionId = ""; localStorage.removeItem("kb_session_id");
+    var cm = document.getElementById("chatMessages"); if (!cm) return;
+    cm.querySelectorAll(".session-view").forEach(function(v) { v.style.display = "none"; });
+    var view = cv("");
+    view.style.display = "";
+    view.innerHTML = '<div class="chat-empty"><div class="chat-empty-icon">💬</div><p>开始一段新的对话吧</p><p class="chat-empty-hint">在下方输入你的问题，AI 会基于知识库为你解答</p></div>';
+    rsl();
   }
 
   function scv() { switchView("chat"); }
@@ -538,6 +552,17 @@
   async function sdm() {
     var inp = $("chatInput"); var txt = inp.value.trim();
     if (!txt || state.streaming) return;
+    if (!state.sessionId) {
+      state.sessionId = gid();
+      localStorage.setItem("kb_session_id", state.sessionId);
+      uts(state.sessionId);
+    }
+    var chatBox = document.getElementById("chatMessages");
+    if (chatBox) {
+      chatBox.querySelectorAll(".session-view").forEach(function(v) {
+        v.style.display = (v.getAttribute("data-sid") === state.sessionId) ? "" : "none";
+      });
+    }
     inp.value = ""; inp.style.height = "auto";
     var mySid = state.sessionId;
     ams("user", txt, mySid);
@@ -1485,15 +1510,32 @@ async function ckb() {
     chk();
     setInterval(chk, 30000);
     syncGraphModeButtons();
-    if (!state.sessionId) { state.sessionId = gid(); localStorage.setItem("kb_session_id", state.sessionId); }
-    uts(state.sessionId); rsl();
     loadSettings(true);
     loadSystemStatus();
-    synSessions(); lkl().then(function() { rdl(); lch(); });
+    if (state.sessionId) { rsl(); } else { showNoSession(); }
+    synSessions().then(function() {
+      if (!state.sessionId) {
+        var list = gsl();
+        if (list.length) {
+          state.sessionId = list[0].id;
+          localStorage.setItem("kb_session_id", state.sessionId);
+          var chatBox = document.getElementById("chatMessages");
+          if (chatBox) {
+            chatBox.querySelectorAll(".session-view").forEach(function(v) {
+              v.style.display = (v.getAttribute("data-sid") === state.sessionId) ? "" : "none";
+            });
+          }
+        } else {
+          showNoSession();
+        }
+      }
+      rsl();
+      return lkl().then(function() { rdl(); if (state.sessionId) lch(); });
+    });
   }
 
   function synSessions() {
-    fetch("/api/chat/sessions?user_id=" + encodeURIComponent(state.userId)).then(function(r){ return r.json(); }).then(function(d){
+    return fetch("/api/chat/sessions?user_id=" + encodeURIComponent(state.userId)).then(function(r){ return r.json(); }).then(function(d){
       if (!d || !d.sessions || !d.sessions.length) return;
       var local = gsl(); var localMap = {};
       local.forEach(function(s) { localMap[s.id] = s; });
