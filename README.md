@@ -208,6 +208,5 @@ landing/            落地页
 - [项目设计文档.md](./项目设计文档.md)
 - [启动说明.md](./启动说明.md)
 - [API_DOCS.md](./API_DOCS.md)
-- [OPERATIONS.md](./OPERATIONS.md)
 - [agent评估指标体系.md](./agent评估指标体系.md)
 - [agent_eval/README.md](./agent_eval/README.md)
