@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from app.config import settings as env_settings
 from app.core.user_settings import (
     UserSettings,
+    _normalize_local_url,
     chat_config,
     embedding_config,
     get_settings,
@@ -30,7 +31,7 @@ class SettingsUpdate(BaseModel):
     chat_thinking: bool = True
     embedding_provider: str = "ollama"
     embedding_model: str = "qwen3-embedding:4b"
-    embedding_base_url: str = "http://localhost:11434/v1"
+    embedding_base_url: str = "http://127.0.0.1:11434/v1"
     embedding_api_key: str = ""
     search_provider: str = "auto"  # auto | tavily | searxng | bing | duckduckgo
     search_api_key: str = ""
@@ -68,6 +69,7 @@ async def write_settings(data: SettingsUpdate):
     for field in ("chat_api_key", "embedding_api_key", "search_api_key", "neo4j_password"):
         if payload.get(field) in ("", "***"):
             payload[field] = getattr(current, field)
+    payload["embedding_base_url"] = _normalize_local_url(payload.get("embedding_base_url") or "")
     try:
         port = int(payload.get("app_port", 8001))
     except (TypeError, ValueError):

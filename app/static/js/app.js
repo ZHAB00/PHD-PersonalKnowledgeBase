@@ -1048,7 +1048,7 @@
     var apiKey = $("onbChatApiKey"), base = $("onbChatBaseUrl"), model = $("onbChatModel");
     if (val === "ollama") {
       cfg.style.display = "block";
-      if (base) base.value = "http://localhost:11434/v1";
+      if (base) base.value = "http://127.0.0.1:11434/v1";
       if (model) model.placeholder = "例如 qwen2.5:7b";
       if (apiKey) { apiKey.placeholder = "本地无需 Key"; apiKey.value = ""; }
     } else if (val === "lmstudio") {
@@ -1078,7 +1078,7 @@
       $("setEmbeddingApiKey").value = "";
     } else if (emb === "ollama") {
       $("setEmbeddingModel").value = "qwen3-embedding:4b";
-      $("setEmbeddingBaseUrl").value = "http://localhost:11434/v1";
+      $("setEmbeddingBaseUrl").value = "http://127.0.0.1:11434/v1";
     } else if (emb === "openai_compatible") {
       if (!$("setEmbeddingModel").value) $("setEmbeddingModel").value = "text-embedding-3-small";
     }
@@ -2800,4 +2800,3 @@ async function ckb() {
   window.buildGraph = buildGraph;
   window.renderGraphView = renderGraphView;
 })();
-

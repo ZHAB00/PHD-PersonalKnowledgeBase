@@ -8,7 +8,7 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 
 from app.main import app
-from app.core.user_settings import chat_config, save_settings, UserSettings
+from app.core.user_settings import _normalize_local_url, chat_config, save_settings, UserSettings
 
 
 @pytest.fixture
@@ -84,6 +84,29 @@ def test_release_defaults_use_local_embedding():
     assert s.app_port == 8001
     assert s.close_to_tray is True
     assert s.neo4j_enabled is False
+
+
+def test_embedding_config_normalizes_localhost_to_ipv4():
+    assert _normalize_local_url("http://localhost:11434/v1") == "http://127.0.0.1:11434/v1"
+    assert _normalize_local_url("") == ""
+
+
+@pytest.mark.asyncio
+async def test_save_settings_normalizes_embedding_base_url(client, tmp_path, monkeypatch):
+    import app.core.user_settings as us
+    monkeypatch.setattr(us, "SETTINGS_FILE", tmp_path / "settings.json")
+    payload = {
+        "chat_provider": "deepseek",
+        "chat_base_url": "", "chat_api_key": "", "chat_model": "", "chat_thinking": True,
+        "embedding_provider": "ollama", "embedding_model": "qwen3-embedding:4b",
+        "embedding_base_url": "http://localhost:11434/v1", "embedding_api_key": "",
+        "neo4j_enabled": False, "neo4j_uri": "", "neo4j_user": "", "neo4j_password": "", "neo4j_database": "",
+        "require_password": False, "password": "",
+        "app_port": 8001, "close_to_tray": True,
+    }
+    r = await client.put("/api/settings", json=payload)
+    assert r.status_code == 200
+    assert r.json()["embedding_base_url"] == "http://127.0.0.1:11434/v1"
 
 
 @pytest.mark.asyncio

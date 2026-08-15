@@ -168,12 +168,19 @@ def chat_config() -> dict:
     return {"base_url": base, "api_key": key, "model": model, "extra_body": extra}
 
 
+def _normalize_local_url(url: str) -> str:
+    """Windows 下 localhost 可能解析到异常的 IPv6 Ollama 实例，统一走 IPv4。"""
+    if not url:
+        return url
+    return url.replace("://localhost:", "://127.0.0.1:")
+
+
 def embedding_config() -> dict:
     """返回当前向量化配置。"""
     s = get_settings()
     return {
         "provider": s.embedding_provider,
         "model": s.embedding_model,
-        "base_url": s.embedding_base_url,
+        "base_url": _normalize_local_url(s.embedding_base_url),
         "api_key": s.embedding_api_key,
     }

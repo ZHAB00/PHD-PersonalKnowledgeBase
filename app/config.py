@@ -10,7 +10,7 @@ class Settings(BaseSettings):
 
     # 向量化模型（Ollama + Qwen3-embedding）
     embedding_model: str = "qwen3-embedding:4b"
-    embedding_base_url: str = "http://localhost:11434/v1"
+    embedding_base_url: str = "http://127.0.0.1:11434/v1"
     embedding_dim: int = 2560
 
     # Qdrant 向量库
