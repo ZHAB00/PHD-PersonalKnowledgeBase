@@ -75,3 +75,38 @@ async def test_login_local_password_flow(client, tmp_path, monkeypatch):
     ok = await client.post("/api/auth/login-local", json={"password": "abc123"})
     assert ok.status_code == 200
     assert ok.json()["access_token"]
+
+
+def test_release_defaults_use_local_embedding():
+    s = UserSettings()
+    assert s.embedding_provider == "local"
+    assert s.embedding_model == "BAAI/bge-small-zh-v1.5"
+    assert s.app_port == 8001
+    assert s.close_to_tray is True
+    assert s.neo4j_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_settings_status_endpoint(client):
+    r = await client.get("/api/settings/status")
+    assert r.status_code == 200
+    data = r.json()
+    assert "debug_mode" in data
+    assert "app_port" in data
+    assert "ocr_available" in data
+    assert "bundled_model" in data
+
+
+@pytest.mark.asyncio
+async def test_settings_rejects_invalid_port(client):
+    payload = {
+        "chat_provider": "deepseek",
+        "chat_base_url": "", "chat_api_key": "", "chat_model": "", "chat_thinking": True,
+        "embedding_provider": "local", "embedding_model": "BAAI/bge-small-zh-v1.5", "embedding_base_url": "", "embedding_api_key": "",
+        "search_provider": "auto", "search_api_key": "", "search_base_url": "",
+        "neo4j_enabled": False, "neo4j_uri": "", "neo4j_user": "", "neo4j_password": "", "neo4j_database": "",
+        "require_password": False, "password": "",
+        "app_port": 80, "close_to_tray": True,
+    }
+    r = await client.put("/api/settings", json=payload)
+    assert r.status_code == 400

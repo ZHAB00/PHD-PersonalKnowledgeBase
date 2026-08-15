@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PDH-PKG</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=40">
+  <link rel="stylesheet" href="/static/css/style.css?v=41">
   <script src="https://unpkg.com/vis-network@9.1.6/dist/vis-network.min.js"></script>
   <link href="https://unpkg.com/vis-network@9.1.6/dist/vis-network.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
@@ -82,6 +82,14 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
         </button>
       </div>
+      <button class="btn btn-secondary kb-reindex" id="btnKbReindex" title="重新索引当前知识库全部文档">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        重建索引
+      </button>
+    </div>
+    <div class="ocr-warning" id="ocrWarning" style="display:none">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span>未检测到 Tesseract OCR，扫描版 PDF 将跳过文字识别。<a href="https://github.com/UB-Mannheim/tesseract/wiki" target="_blank">下载 Tesseract</a></span>
     </div>
     <div class="upload-zone" id="uploadZone">
       <div class="upload-icon">
@@ -181,6 +189,7 @@
           <button class="settings-nav-item" type="button" data-target="settings-search"><span class="settings-nav-num">03</span><span>联网搜索</span></button>
           <button class="settings-nav-item" type="button" data-target="settings-graph"><span class="settings-nav-num">04</span><span>知识图谱</span></button>
           <button class="settings-nav-item" type="button" data-target="settings-storage"><span class="settings-nav-num">05</span><span>访问与存储</span></button>
+          <button class="settings-nav-item" type="button" data-target="settings-app"><span class="settings-nav-num">06</span><span>应用设置</span></button>
         </aside>
         <div class="settings-content">
           <section class="settings-group" id="settings-chat">
@@ -223,6 +232,7 @@
             <div class="settings-actions">
               <button class="btn" id="testChat">测试连接</button>
               <p class="settings-hint" id="chatTestResult"></p>
+              <p class="settings-hint settings-links">需要本地模型？<a href="https://ollama.com/download" target="_blank">下载 Ollama</a> · <a href="https://lmstudio.ai" target="_blank">LM Studio</a></p>
             </div>
           </section>
 
@@ -258,9 +268,11 @@
                 <input id="setEmbeddingApiKey" type="password" placeholder="云端必填">
               </label>
             </div>
+            <p class="settings-hint settings-warn" id="embeddingDimWarning">切换向量模型后，若维度发生变化，已有索引将无法检索，需要在“文档管理”中重建索引或重新上传。</p>
             <div class="settings-actions">
               <button class="btn" id="testEmbedding">测试连接</button>
               <p class="settings-hint" id="embeddingTestResult"></p>
+              <p class="settings-hint settings-links">使用 Ollama 向量模型：<a href="https://ollama.com/download" target="_blank">下载 Ollama</a>，然后运行 <code>ollama pull qwen3-embedding:4b</code></p>
             </div>
           </section>
 
@@ -335,6 +347,7 @@
             <div class="settings-actions">
               <button class="btn" id="testNeo4j">测试连接</button>
               <p class="settings-hint" id="neo4jTestResult"></p>
+              <p class="settings-hint settings-links">需要 Neo4j？<a href="https://neo4j.com/download/" target="_blank">下载 Neo4j Community</a> · <a href="https://neo4j.com/download/neo4j-desktop/" target="_blank">Neo4j Desktop</a></p>
             </div>
           </section>
 
@@ -363,6 +376,42 @@
               </div>
             </div>
           </section>
+
+          <section class="settings-group" id="settings-app">
+            <div class="settings-group-head">
+              <span class="settings-group-icon">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              </span>
+              <div>
+                <h3>应用设置</h3>
+                <p>服务端口、桌面窗口行为与运行环境状态。</p>
+              </div>
+            </div>
+            <div class="settings-fields">
+              <label class="settings-field">
+                <span>服务端口</span>
+                <input id="setAppPort" type="number" min="1024" max="65535" placeholder="8001">
+              </label>
+              <p class="settings-hint" id="appPortHint">修改端口后点击“保存并重启”，应用会先在后台重启再跳转到新地址。</p>
+              <label class="settings-toggle">
+                <input type="checkbox" id="setCloseToTray">
+                <span>关闭或最小化窗口时隐藏到系统托盘</span>
+              </label>
+              <div class="settings-data-dir wide">
+                <span class="settings-field-label">OCR</span>
+                <code id="setOcrStatus">检测中...</code>
+              </div>
+              <div class="settings-data-dir wide">
+                <span class="settings-field-label">内置向量模型</span>
+                <code id="setBundleStatus">检测中...</code>
+              </div>
+            </div>
+            <div class="settings-actions">
+              <button class="btn btn-primary" id="applyPortRestart">保存并重启</button>
+              <p class="settings-hint" id="appPortResult"></p>
+            </div>
+          </section>
+
         </div>
       </div>
     </div>
@@ -407,13 +456,76 @@
   </div>
 </div>
 
+<div class="onboarding-overlay" id="onboardingOverlay" style="display:none">
+  <div class="onboarding-card">
+    <div class="onboarding-brand">
+      <span class="onboarding-logo">PDH</span>
+      <div>
+        <h2>欢迎使用 PDH-PKG</h2>
+        <p>先完成基础配置，再上传文档开始提问。</p>
+      </div>
+    </div>
+    <div class="onboarding-steps">
+      <div class="onboarding-step active" data-step="1">
+        <span class="step-num">1</span>
+        <div class="step-body">
+          <h3>向量模型（文档检索）</h3>
+          <p>默认使用内置本地模型，完全离线，无需额外安装。</p>
+          <div class="onboarding-options">
+            <label class="onb-option"><input type="radio" name="onbEmbedding" value="local" checked><span><b>内置本地模型</b><small>bge-small-zh-v1.5 · 离线 · 推荐</small></span></label>
+            <label class="onb-option"><input type="radio" name="onbEmbedding" value="ollama"><span><b>Ollama</b><small>需先安装 Ollama 并拉取向量模型</small></span></label>
+            <label class="onb-option"><input type="radio" name="onbEmbedding" value="openai_compatible"><span><b>OpenAI 兼容</b><small>填写云端接口地址与 Key</small></span></label>
+          </div>
+        </div>
+      </div>
+      <div class="onboarding-step" data-step="2">
+        <span class="step-num">2</span>
+        <div class="step-body">
+          <h3>对话模型</h3>
+          <p>选择云端 DeepSeek（需要 API Key）或本地 Ollama / LM Studio。</p>
+          <div class="onboarding-options">
+            <label class="onb-option"><input type="radio" name="onbChat" value="deepseek" checked><span><b>DeepSeek 云端</b><small>填写 API Key，对话质量高</small></span></label>
+            <label class="onb-option"><input type="radio" name="onbChat" value="ollama"><span><b>Ollama 本地</b><small>完全离线，需先下载模型</small></span></label>
+            <label class="onb-option"><input type="radio" name="onbChat" value="openai_compatible"><span><b>OpenAI 兼容</b><small>任意兼容接口</small></span></label>
+            <label class="onb-option"><input type="radio" name="onbChat" value="lmstudio"><span><b>LM Studio</b><small>本地桌面模型服务</small></span></label>
+          </div>
+          <div class="onb-chat-config" id="onbChatConfig">
+            <label class="settings-field"><span>API Key</span><input id="onbChatApiKey" type="password" placeholder="DeepSeek API Key"></label>
+            <label class="settings-field"><span>Base URL</span><input id="onbChatBaseUrl" placeholder="留空使用默认"></label>
+            <label class="settings-field"><span>模型名</span><input id="onbChatModel" placeholder="留空使用默认"></label>
+          </div>
+        </div>
+      </div>
+      <div class="onboarding-step" data-step="3">
+        <span class="step-num">3</span>
+        <div class="step-body">
+          <h3>完成</h3>
+          <p>设置已准备好。之后随时可以在“设置”页修改，也可以按需连接 Neo4j 知识图谱。</p>
+          <div class="onboarding-links">
+            <a href="https://ollama.com/download" target="_blank">下载 Ollama</a>
+            <a href="https://neo4j.com/download/" target="_blank">下载 Neo4j</a>
+            <a href="https://lmstudio.ai" target="_blank">LM Studio</a>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="onboarding-footer">
+      <button class="btn" id="onbSkip">跳过，稍后配置</button>
+      <div class="onboarding-nav">
+        <button class="btn" id="onbPrev" style="display:none">上一步</button>
+        <button class="btn btn-primary" id="onbNext">下一步</button>
+        <button class="btn btn-primary" id="onbFinish" style="display:none">完成并开始使用</button>
+      </div>
+    </div>
+  </div>
 </div>
 
+</div>
 <script>
 var _t = localStorage.getItem("kb_token");
 if (!_t) { window.location.href = "/login"; }
 </script>
-  <script src="/static/js/app.js?v=81"></script>
+  <script src="/static/js/app.js?v=82"></script>
 </body>
 </html>
 

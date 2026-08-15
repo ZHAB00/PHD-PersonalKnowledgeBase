@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
+from app.config import settings as env_settings
 from app.core.user_settings import (
     UserSettings,
     chat_config,
@@ -41,6 +42,8 @@ class SettingsUpdate(BaseModel):
     neo4j_database: str = "neo4j"
     require_password: bool = False
     password: str = ""
+    app_port: int = 8001
+    close_to_tray: bool = True
 
 
 @router.get("/public")
@@ -65,6 +68,15 @@ async def write_settings(data: SettingsUpdate):
     for field in ("chat_api_key", "embedding_api_key", "search_api_key", "neo4j_password"):
         if payload.get(field) in ("", "***"):
             payload[field] = getattr(current, field)
+    try:
+        port = int(payload.get("app_port", 8001))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "端口必须是数字")
+    if not (1024 <= port <= 65535):
+        raise HTTPException(400, "端口必须在 1024-65535 之间")
+    if port in (6333, 6379, 11434, 7687):
+        raise HTTPException(400, f"端口 {port} 已被其他服务占用")
+    payload["app_port"] = port
     if payload.get("password"):
         payload["password_hash"] = _hash_password(payload["password"])
     else:
@@ -169,6 +181,35 @@ async def test_neo4j(uri: str = "bolt://localhost:7687", user: str = "neo4j", pa
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
+
+
+@router.get("/status")
+async def system_status():
+    """系统运行状态：调试模式、端口、OCR 与内置模型可用性。"""
+    from app.core.user_settings import DEBUG_MODE
+    from app.core.ocr import is_tesseract_available
+    from app.core.embedding import _bundled_model_dir
+    s = get_settings()
+    return {
+        "debug_mode": DEBUG_MODE,
+        "app_port": s.app_port,
+        "service_port": env_settings.service_port,
+        "close_to_tray": s.close_to_tray,
+        "ocr_available": is_tesseract_available(),
+        "bundled_model": _bundled_model_dir() is not None,
+    }
+
+
+@router.post("/apply-port")
+async def apply_port():
+    """请求桌面启动器在保存的新端口上重启后端。"""
+    from app.core.user_settings import DEBUG_MODE
+    from app.core.app_control import request_restart
+    if DEBUG_MODE:
+        raise HTTPException(400, "调试模式下端口由 .env 的 SERVICE_PORT 控制，不支持热重启")
+    s = get_settings()
+    request_restart(s.app_port)
+    return {"ok": True, "port": s.app_port}
 
 
 @router.post("/verify-password")

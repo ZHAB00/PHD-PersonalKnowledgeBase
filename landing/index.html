@@ -616,6 +616,21 @@ body[data-scheme="coral"] {
   * { transition: none !important; animation: none !important; }
   .reveal { opacity: 1; transform: none; }
 }
+
+.shot-grid.wide { grid-template-columns: 1fr 1fr; gap: 24px; }
+.shot-caption h3 { margin: 14px 0 6px; font-size: 16px; font-weight: 700; }
+.shot-caption p { margin: 0; color: var(--muted); font-size: 14px; }
+.graph-showcase { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.graph-show .frame { border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; background: #0b1020; box-shadow: var(--shadow-soft); }
+.graph-show .frame img { width: 100%; height: auto; }
+.graph-show figcaption { display: flex; flex-direction: column; gap: 8px; padding: 16px 2px 0; }
+.graph-show figcaption .chip { align-self: flex-start; }
+.graph-show h3 { margin: 0; font-size: 18px; font-weight: 700; }
+.graph-show p { margin: 0; color: var(--muted); font-size: 14px; }
+@media (max-width: 620px) {
+  .shot-grid.wide, .graph-showcase { grid-template-columns: 1fr; }
+}
+
 </style>
 </head>
 <body>
@@ -638,12 +653,12 @@ body[data-scheme="coral"] {
       <a href="#github">开源</a>
       <div class="nav-cta"><a class="btn btn-primary" href="#download">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        下载安装包
+        安装计划
       </a></div>
     </div>
     <a class="btn btn-primary nav-desktop-cta" href="#download">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      下载安装包
+      安装计划
     </a>
     <button class="nav-burger" id="navBurger" aria-label="打开导航" aria-expanded="false">
       <svg id="burgerIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
@@ -662,8 +677,8 @@ body[data-scheme="coral"] {
       <p class="hero-sub">学习笔记、面试题库、工作资料都能沉淀成可对话的知识库。数据默认保存在本机，支持完全离线运行，也可以部署到内网或云端。</p>
       <div class="hero-actions">
         <a class="btn btn-primary btn-lg" href="#download">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          下载 Windows 安装包
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="7" x2="12" y2="12"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          查看安装计划
         </a>
         <a class="btn btn-secondary btn-lg" href="#preview">
           查看界面预览
@@ -742,24 +757,25 @@ body[data-scheme="coral"] {
   <div class="container">
     <div class="section-head center reveal">
       <span class="eyebrow">界面预览</span>
-      <h2>三个核心视图，覆盖完整工作流</h2>
-      <p>对话、文档、设置全部集成在同一个桌面应用里。</p>
+      <h2>四个核心场景，直接看到真实界面</h2>
+      <p>对话、知识图谱、文档与设置全部集成在同一个桌面应用里。</p>
     </div>
-    <div class="shot-grid">
+    <div class="shot-grid wide">
       <div class="shot-item reveal">
-        <div class="frame"><img src="assets/screens/chat.jpg" alt="对话界面"></div>
-        <h3>流式对话</h3>
-        <p>知识库即选即用，工具调用过程独立展示，回答附带来源引用。</p>
+        <div class="frame"><img src="assets/screens/chat.jpg" alt="流式对话界面"></div>
+        <div class="shot-caption"><h3>流式对话</h3><p>知识库即选即用，工具调用过程独立展示，回答附带来源引用。</p></div>
+      </div>
+      <div class="shot-item reveal">
+        <div class="frame"><img src="assets/screens/graph2d.jpg" alt="2D 知识图谱"></div>
+        <div class="shot-caption"><h3>2D 知识图谱</h3><p>文档实体与关系自动抽取，支持搜索、缩放与图例。</p></div>
+      </div>
+      <div class="shot-item reveal">
+        <div class="frame"><img src="assets/screens/graph3d.jpg" alt="3D 知识图谱"></div>
+        <div class="shot-caption"><h3>3D 知识图谱</h3><p>球面布局、标签可见，拖拽查看实体之间的关联。</p></div>
       </div>
       <div class="shot-item reveal">
         <div class="frame"><img src="assets/screens/docs.jpg" alt="文档管理界面"></div>
-        <h3>文档管理</h3>
-        <p>拖拽上传、分库管理，向量索引与知识图谱入库自动完成。</p>
-      </div>
-      <div class="shot-item reveal">
-        <div class="frame"><img src="assets/screens/settings.jpg" alt="设置中心界面"></div>
-        <h3>设置中心</h3>
-        <p>对话模型、向量化、Neo4j 与访问密码可视化配置，首次启动有引导。</p>
+        <div class="shot-caption"><h3>文档管理</h3><p>拖拽上传、分库管理，解析、向量化与图谱入库自动完成。</p></div>
       </div>
     </div>
   </div>
@@ -769,95 +785,75 @@ body[data-scheme="coral"] {
   <div class="container">
     <div class="section-head center reveal">
       <span class="eyebrow">知识图谱</span>
-      <h2>3D 图谱四套视觉设计</h2>
-      <p>实体标签始终可见，支持拖拽缩放、悬停高亮，深度展示文档之间的关系。</p>
+      <h2>从文档自动生长出来的关系网络</h2>
+      <p>图谱由文档自动抽取实体与关系生成，可 2D / 3D 切换，并作为检索证据参与回答。</p>
     </div>
-    <div class="graph-grid">
-      <article class="graph-card reveal">
-        <div class="swatch swatch-1">
-          <svg viewBox="0 0 170 120">
-            <line x1="30" y1="82" x2="70" y2="38"/><line x1="70" y1="38" x2="115" y2="30"/><line x1="115" y1="30" x2="145" y2="70"/><line x1="70" y1="38" x2="60" y2="92"/><line x1="115" y1="30" x2="140" y2="18"/><line x1="60" y1="92" x2="140" y2="18"/>
-            <circle cx="30" cy="82" r="8"/><circle cx="70" cy="38" r="10"/><circle cx="115" cy="30" r="7"/><circle cx="145" cy="70" r="8"/><circle cx="60" cy="92" r="7"/><circle cx="140" cy="18" r="5"/>
-          </svg>
-        </div>
-        <div class="meta"><h3>星际星云</h3><p>星空粒子与节点光晕</p></div>
-      </article>
-      <article class="graph-card reveal">
-        <div class="swatch swatch-2">
-          <svg viewBox="0 0 170 120">
-            <line x1="30" y1="82" x2="70" y2="38"/><line x1="70" y1="38" x2="115" y2="30"/><line x1="115" y1="30" x2="145" y2="70"/><line x1="70" y1="38" x2="60" y2="92"/><line x1="115" y1="30" x2="140" y2="18"/>
-            <circle cx="30" cy="82" r="8"/><circle cx="70" cy="38" r="10"/><circle cx="115" cy="30" r="7"/><circle cx="145" cy="70" r="8"/><circle cx="60" cy="92" r="7"/><circle cx="140" cy="18" r="5"/>
-          </svg>
-        </div>
-        <div class="meta"><h3>全息晶体</h3><p>网格地面与八面体节点</p></div>
-      </article>
-      <article class="graph-card reveal">
-        <div class="swatch swatch-3">
-          <svg viewBox="0 0 170 120">
-            <line x1="30" y1="82" x2="70" y2="38"/><line x1="70" y1="38" x2="115" y2="30"/><line x1="115" y1="30" x2="145" y2="70"/><line x1="70" y1="38" x2="60" y2="92"/><line x1="115" y1="30" x2="140" y2="18"/>
-            <circle cx="30" cy="82" r="8"/><circle cx="70" cy="38" r="10"/><circle cx="115" cy="30" r="7"/><circle cx="145" cy="70" r="8"/><circle cx="60" cy="92" r="7"/><circle cx="140" cy="18" r="5"/>
-          </svg>
-        </div>
-        <div class="meta"><h3>霓虹电路</h3><p>霓虹节点与脉冲光效</p></div>
-      </article>
-      <article class="graph-card reveal">
-        <div class="swatch swatch-4">
-          <svg viewBox="0 0 170 120">
-            <line x1="30" y1="82" x2="70" y2="38"/><line x1="70" y1="38" x2="115" y2="30"/><line x1="115" y1="30" x2="145" y2="70"/><line x1="70" y1="38" x2="60" y2="92"/><line x1="115" y1="30" x2="140" y2="18"/>
-            <circle cx="30" cy="82" r="8"/><circle cx="70" cy="38" r="10"/><circle cx="115" cy="30" r="7"/><circle cx="145" cy="70" r="8"/><circle cx="60" cy="92" r="7"/><circle cx="140" cy="18" r="5"/>
-          </svg>
-        </div>
-        <div class="meta"><h3>浅色极简</h3><p>浅色背景与高可读标签</p></div>
-      </article>
+    <div class="graph-showcase">
+      <figure class="graph-show reveal">
+        <div class="frame graph-frame"><img src="assets/screens/graph2d.jpg" alt="2D 知识图谱"></div>
+        <figcaption>
+          <span class="chip chip-accent">2D 平面布局</span>
+          <h3>实体与关系</h3>
+          <p>1900+ 实体 · 3000+ 关系，图例区分实体类型。</p>
+        </figcaption>
+      </figure>
+      <figure class="graph-show reveal">
+        <div class="frame graph-frame"><img src="assets/screens/graph3d.jpg" alt="3D 知识图谱"></div>
+        <figcaption>
+          <span class="chip chip-accent">3D 球面布局</span>
+          <h3>空间探索</h3>
+          <p>四套视觉设计，标签始终可见。</p>
+        </figcaption>
+      </figure>
     </div>
-    <p class="graph-note reveal">图谱数据由文档自动抽取生成，支持按实体搜索与刷新，可随时在 2D / 3D 之间切换。</p>
+    <p class="graph-note reveal">支持按实体搜索、刷新与重建，2D / 3D 即时切换，四种视觉设计覆盖不同偏好。</p>
   </div>
 </section>
 
 <section class="section" id="download">
   <div class="container">
     <div class="section-head center reveal">
-      <span class="eyebrow">下载安装包</span>
+      <span class="eyebrow">下载</span>
       <h2>Windows x64，两种安装方式</h2>
-      <p>Windows x64，安装版与便携版两种选择，下载即用。</p>
+      <p>安装包正在打磨，完成后将在这里开放下载。</p>
     </div>
     <div class="download-grid">
       <article class="download-card reveal">
-        <div class="file-type">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
-        </div>
-        <div>
-          <h3>安装版</h3>
-          <p class="filename">PDH-PKG-Setup-0.1.0.exe</p>
-        </div>
-        <div class="chips">
-          <span class="chip chip-accent">约 213 MB</span>
-          <span class="chip">Windows 10 / 11 x64</span>
-          <span class="chip">内置向量模型可选</span>
-        </div>
-        <a class="btn btn-primary" href="downloads/PDH-PKG-Setup-0.1.0.exe">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          下载安装包
-        </a>
-      </article>
+  <div class="file-type">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+  </div>
+  <div>
+    <h3>安装版</h3>
+    <p class="filename">PDH-PKG-Setup-0.1.0.exe</p>
+  </div>
+  <div class="chips">
+    <span class="chip chip-accent">约 213 MB</span>
+    <span class="chip">Windows 10 / 11 x64</span>
+    <span class="chip">内置向量模型可选</span>
+  </div>
+  <a class="btn btn-primary" href="#download" aria-disabled="true">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="7" x2="12" y2="12"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    即将发布
+  </a>
+</article>
       <article class="download-card reveal">
-        <div class="file-type">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 9.4 7.55 4.24"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
-        </div>
-        <div>
-          <h3>便携版</h3>
-          <p class="filename">PDH-PKG-0.1.0-desktop.zip</p>
-        </div>
-        <div class="chips">
-          <span class="chip chip-accent">约 290 MB</span>
-          <span class="chip">免安装解压即用</span>
-          <span class="chip">含内置模型</span>
-        </div>
-        <a class="btn btn-secondary" href="downloads/PDH-PKG-0.1.0-desktop.zip">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          下载便携版
-        </a>
-      </article>
+  <div class="file-type">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 9.4 7.55 4.24"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+  </div>
+  <div>
+    <h3>便携版</h3>
+    <p class="filename">PDH-PKG-0.1.0-desktop.zip</p>
+  </div>
+  <div class="chips">
+    <span class="chip chip-accent">约 290 MB</span>
+    <span class="chip">免安装解压即用</span>
+    <span class="chip">含内置模型</span>
+  </div>
+  <a class="btn btn-secondary" href="#download" aria-disabled="true">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="7" x2="12" y2="12"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    即将发布
+  </a>
+</article>
     </div>
     <div class="download-note reveal">
       <span class="chip"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>数据默认保存在用户目录</span>
@@ -977,3 +973,4 @@ if ("IntersectionObserver" in window) {
 </script>
 </body>
 </html>
+

@@ -816,8 +816,11 @@
       $("setNeo4jPassword").value = s.neo4j_password || "";
       $("setNeo4jDatabase").value = s.neo4j_database || "";
       $("setRequirePassword").checked = !!s.require_password;
+      var appPort = $("setAppPort"); if (appPort) appPort.value = s.app_port || 8001;
+      var closeTray = $("setCloseToTray"); if (closeTray) closeTray.checked = !!s.close_to_tray;
+      state._savedPort = parseInt(s.app_port || "8001", 10);
       var dd = $("setDataDir"); if (dd) dd.textContent = s.data_dir || "";
-      if (firstRun && !s.configured && !$("view-settings").classList.contains("active")) switchView("settings");
+      if (firstRun && !s.configured) showOnboarding();
     }).catch(function(){}).finally(function() {
       _settingsLoading = false;
       if (loading) loading.style.display = "none";
@@ -844,13 +847,15 @@
       neo4j_password: $("setNeo4jPassword").value,
       neo4j_database: $("setNeo4jDatabase").value.trim(),
       require_password: $("setRequirePassword").checked,
-      password: $("setPassword").value
+      password: $("setPassword").value,
+      app_port: parseInt($("setAppPort").value || "8001", 10),
+      close_to_tray: $("setCloseToTray").checked
     };
   }
 
   function saveSettings() {
     var body = JSON.stringify(collectSettings());
-    fetch("/api/settings", { method: "PUT", headers: {"Content-Type":"application/json"}, body: body })
+    return fetch("/api/settings", { method: "PUT", headers: {"Content-Type":"application/json"}, body: body })
       .then(function(r){ return r.json(); })
       .then(function(s) {
         var el = $("settingsSaveResult"); if (el) { el.textContent = "已保存"; el.style.color = "#16a34a"; }
@@ -859,9 +864,16 @@
         $("setSearchApiKey").value = s.search_api_key || "";
         $("setNeo4jPassword").value = s.neo4j_password || "";
         $("setPassword").value = "";
+        var newPort = parseInt($("setAppPort").value || "8001", 10);
+        if (state._savedPort && state._savedPort !== newPort) {
+          var hint = $("appPortHint");
+          if (hint) hint.textContent = "端口已保存，点击“保存并重启”立即生效";
+        }
+        state._savedPort = newPort;
       })
       .catch(function(e) {
-        var el = $("settingsSaveResult"); if (el) { el.textContent = "保存失败: " + e.message; el.style.color = "#dc2626"; }
+        var el = $("settingsSaveResult"); if (el) { el.textContent = "保存失败: " + (e.message || e); el.style.color = "#dc2626"; }
+        throw e;
       });
   }
 
@@ -925,6 +937,167 @@
         el.style.color = d.ok ? "#16a34a" : "#dc2626";
       }).catch(function(e){ el.textContent="测试失败: "+e.message; el.style.color="#dc2626"; })
       .finally(function(){ if (btn) btn.disabled = false; if (el) el.classList.remove("settings-hint-loading"); });
+  }
+
+  function loadSystemStatus() {
+    fetch("/api/settings/status").then(function(r){ return r.json(); }).then(function(d) {
+      state.systemStatus = d;
+      if (!d.ocr_available) {
+        var w = $("ocrWarning"); if (w) w.style.display = "flex";
+      }
+      var ocr = $("setOcrStatus"); if (ocr) ocr.textContent = d.ocr_available ? "可用" : "不可用（扫描版 PDF 将跳过识别）";
+      var bm = $("setBundleStatus"); if (bm) bm.textContent = d.bundled_model ? "已内置" : "未内置";
+      var port = $("setAppPort"), pp = $("applyPortRestart"), hint = $("appPortHint");
+      if (d.debug_mode) {
+        if (port) { port.value = d.service_port || 8001; port.disabled = true; }
+        if (pp) pp.disabled = true;
+        if (hint) hint.textContent = "调试模式下端口由 .env 的 SERVICE_PORT 控制";
+      }
+    }).catch(function(){});
+  }
+
+  function applyPortRestart() {
+    var btn = $("applyPortRestart"), el = $("appPortResult");
+    if (btn) btn.disabled = true;
+    if (el) { el.textContent = "正在重启后端..."; el.style.color = "#6366f1"; }
+    saveSettings().then(function() {
+      return fetch("/api/settings/apply-port", { method: "POST" }).then(function(r){ return r.json(); });
+    })
+      .then(function(d) {
+        if (!d.ok) throw new Error(d.error || "重启请求失败");
+        return waitForServer(d.port, 40000);
+      })
+      .then(function(port) {
+        if (el) { el.textContent = "后端已在新端口启动，正在跳转..."; el.style.color = "#16a34a"; }
+        window.location.href = "http://127.0.0.1:" + port;
+      })
+      .catch(function(e) {
+        if (el) { el.textContent = "重启失败: " + (e.message || e); el.style.color = "#dc2626"; }
+        if (btn) btn.disabled = false;
+      });
+  }
+
+  function waitForServer(port, timeout) {
+    var t0 = Date.now();
+    return new Promise(function(resolve, reject) {
+      function ping() {
+        fetch("http://127.0.0.1:" + port + "/health", { cache: "no-store" })
+          .then(function(r){ if (r.ok) { resolve(port); } else { retry(); } })
+          .catch(retry);
+      }
+      function retry() {
+        if (Date.now() - t0 > timeout) { reject(new Error("等待服务重启超时")); return; }
+        setTimeout(ping, 800);
+      }
+      ping();
+    });
+  }
+
+  function reindexKb() {
+    showConfirm("将清理当前知识库的全部向量索引并重新解析文档，是否继续？", function() {
+      var btn = $("btnKbReindex");
+      if (btn) { btn.disabled = true; btn.classList.add("btn-loading"); }
+      fetch("/api/kb/" + encodeURIComponent(state.docKbId) + "/reindex?tenant_id=" + state.tenantId, { method: "POST" })
+        .then(function(r){ return r.json(); })
+        .then(function(d) {
+          if (!d || d.status !== "reindexing") throw new Error((d && d.detail) || "重建失败");
+          setTimeout(function(){ rdl(); lkl(); }, 2000);
+          if (btn) setTimeout(function(){ btn.disabled = false; btn.classList.remove("btn-loading"); }, 1500);
+        })
+        .catch(function(e) {
+          if (btn) { btn.disabled = false; btn.classList.remove("btn-loading"); }
+          alert("重建失败: " + (e.message || e));
+        });
+    });
+  }
+
+  function showOnboarding() {
+    var ov = $("onboardingOverlay");
+    if (!ov) return;
+    ov.style.display = "flex";
+    updateOnbSteps(1);
+  }
+  function hideOnboarding() {
+    var ov = $("onboardingOverlay");
+    if (ov) ov.style.display = "none";
+  }
+  function updateOnbSteps(step) {
+    document.querySelectorAll(".onboarding-step").forEach(function(el) {
+      el.classList.toggle("active", parseInt(el.getAttribute("data-step"), 10) === step);
+    });
+    var prev = $("onbPrev"), next = $("onbNext"), finish = $("onbFinish");
+    if (prev) prev.style.display = step <= 1 ? "none" : "";
+    if (next) next.style.display = step >= 3 ? "none" : "";
+    if (finish) finish.style.display = step >= 3 ? "" : "none";
+  }
+  function onbNext() {
+    var active = document.querySelector(".onboarding-step.active");
+    var step = active ? parseInt(active.getAttribute("data-step"), 10) : 1;
+    updateOnbSteps(step + 1);
+  }
+  function onbPrev() {
+    var active = document.querySelector(".onboarding-step.active");
+    var step = active ? parseInt(active.getAttribute("data-step"), 10) : 1;
+    updateOnbSteps(step - 1);
+  }
+  function updateOnbChatConfig() {
+    var val = document.querySelector('input[name="onbChat"]:checked');
+    val = val ? val.value : "deepseek";
+    var cfg = $("onbChatConfig");
+    if (!cfg) return;
+    var apiKey = $("onbChatApiKey"), base = $("onbChatBaseUrl"), model = $("onbChatModel");
+    if (val === "ollama") {
+      cfg.style.display = "block";
+      if (base) base.value = "http://localhost:11434/v1";
+      if (model) model.placeholder = "例如 qwen2.5:7b";
+      if (apiKey) { apiKey.placeholder = "本地无需 Key"; apiKey.value = ""; }
+    } else if (val === "lmstudio") {
+      cfg.style.display = "block";
+      if (base) base.value = "http://localhost:1234/v1";
+      if (model) model.placeholder = "例如 local-model";
+      if (apiKey) { apiKey.placeholder = "本地无需 Key"; apiKey.value = ""; }
+    } else if (val === "openai_compatible") {
+      cfg.style.display = "block";
+      if (apiKey) apiKey.placeholder = "API Key";
+    } else {
+      cfg.style.display = "block";
+      if (base) base.value = "";
+      if (model) model.placeholder = "留空使用默认";
+      if (apiKey) apiKey.placeholder = "DeepSeek API Key";
+    }
+  }
+  function onbFinish() {
+    var emb = document.querySelector('input[name="onbEmbedding"]:checked');
+    var chat = document.querySelector('input[name="onbChat"]:checked');
+    emb = emb ? emb.value : "local";
+    chat = chat ? chat.value : "deepseek";
+    $("setEmbeddingProvider").value = emb;
+    if (emb === "local") {
+      $("setEmbeddingModel").value = "BAAI/bge-small-zh-v1.5";
+      $("setEmbeddingBaseUrl").value = "";
+      $("setEmbeddingApiKey").value = "";
+    } else if (emb === "ollama") {
+      $("setEmbeddingModel").value = "qwen3-embedding:4b";
+      $("setEmbeddingBaseUrl").value = "http://localhost:11434/v1";
+    } else if (emb === "openai_compatible") {
+      if (!$("setEmbeddingModel").value) $("setEmbeddingModel").value = "text-embedding-3-small";
+    }
+    $("setChatProvider").value = chat;
+    $("setChatApiKey").value = $("onbChatApiKey").value || "";
+    $("setChatBaseUrl").value = $("onbChatBaseUrl").value || "";
+    $("setChatModel").value = $("onbChatModel").value || "";
+    saveSettings().then(function() {
+      hideOnboarding();
+      scv();
+      loadSystemStatus();
+    }).catch(function(){});
+  }
+  function onbSkip() {
+    saveSettings().then(function() {
+      hideOnboarding();
+      scv();
+      loadSystemStatus();
+    }).catch(function(){});
   }
 
   function updateKbButtons() {
@@ -1226,6 +1399,13 @@ async function ckb() {
   on("navSettings", "click", function() { switchView("settings"); });
   on("settingsBack", "click", function() { scv(); });
   on("saveSettings", "click", saveSettings);
+  on("applyPortRestart", "click", applyPortRestart);
+  on("btnKbReindex", "click", reindexKb);
+  on("onbNext", "click", onbNext);
+  on("onbPrev", "click", onbPrev);
+  on("onbFinish", "click", onbFinish);
+  on("onbSkip", "click", onbSkip);
+  document.querySelectorAll('input[name="onbChat"]').forEach(function(r) { r.addEventListener("change", updateOnbChatConfig); });
   on("testChat", "click", testChat);
   on("testEmbedding", "click", testEmbedding);
   on("testSearch", "click", testSearch);
@@ -1308,6 +1488,7 @@ async function ckb() {
     if (!state.sessionId) { state.sessionId = gid(); localStorage.setItem("kb_session_id", state.sessionId); }
     uts(state.sessionId); rsl();
     loadSettings(true);
+    loadSystemStatus();
     synSessions(); lkl().then(function() { rdl(); lch(); });
   }
 

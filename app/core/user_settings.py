@@ -26,9 +26,9 @@ class UserSettings(BaseModel):
     chat_api_key: str = ""
     chat_model: str = ""
     chat_thinking: bool = True
-    embedding_provider: str = "ollama"  # local | ollama | openai_compatible
-    embedding_model: str = "qwen3-embedding:4b"
-    embedding_base_url: str = "http://localhost:11434/v1"
+    embedding_provider: str = "local"  # local | ollama | openai_compatible
+    embedding_model: str = "BAAI/bge-small-zh-v1.5"
+    embedding_base_url: str = ""
     embedding_api_key: str = ""
     search_provider: str = "auto"  # auto | tavily | searxng | bing | duckduckgo
     search_api_key: str = ""
@@ -40,6 +40,8 @@ class UserSettings(BaseModel):
     neo4j_database: str = "neo4j"
     require_password: bool = False
     password_hash: str = ""
+    app_port: int = 8001
+    close_to_tray: bool = True
 
 
 def _defaults() -> UserSettings:
@@ -58,19 +60,23 @@ def _defaults() -> UserSettings:
             neo4j_user="neo4j",
             neo4j_password=env.neo4j_password,
             neo4j_database="neo4j",
+            app_port=8001,
+            close_to_tray=True,
         )
     return UserSettings(
         chat_base_url=env.deepseek_base_url,
         chat_api_key=env.deepseek_api_key,
         chat_model=env.deepseek_model,
-        embedding_provider="ollama",
-        embedding_model=env.embedding_model,
-        embedding_base_url=env.embedding_base_url,
-        neo4j_enabled=env.neo4j_enabled,
+        embedding_provider="local",
+        embedding_model="BAAI/bge-small-zh-v1.5",
+        embedding_base_url="",
+        neo4j_enabled=False,
         neo4j_uri=env.neo4j_uri,
         neo4j_user=env.neo4j_user,
         neo4j_password=env.neo4j_password,
         neo4j_database=env.neo4j_database,
+        app_port=8001,
+        close_to_tray=True,
     )
 
 

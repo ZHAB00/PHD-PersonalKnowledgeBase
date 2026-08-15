@@ -1,5 +1,8 @@
 """知识库增删改查 API"""
 from __future__ import annotations
+import re
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.models.kb import KnowledgeBase, KnowledgeBaseCreate, KnowledgeBaseUpdate
@@ -43,6 +46,34 @@ async def update_kb_endpoint(kb_id: str, data: KnowledgeBaseUpdate):
         return kb
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.post("/{kb_id}/reindex")
+async def reindex_kb(kb_id: str, tenant_id: str = Query("default")):
+    """重建知识库内全部文档的向量索引（保留原文件）。"""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", kb_id or ""):
+        raise HTTPException(400, "非法知识库ID")
+    from app.workers.ingestion import list_tasks, delete_task, ingest_document
+    from app.core import vector_store
+    from app.core.kb_service import get_doc_dir
+
+    tasks = await list_tasks(kb_id=kb_id, tenant_id=tenant_id)
+    for t in tasks:
+        try:
+            vector_store.delete_document(t.id, kb_id, tenant_id)
+        except Exception:
+            pass
+        await delete_task(kb_id, t.id)
+
+    data_dir = get_doc_dir(kb_id)
+    filenames = []
+    if data_dir.exists():
+        for f in data_dir.iterdir():
+            if f.is_file() and f.suffix.lower() in (".pdf", ".docx", ".md", ".txt"):
+                filenames.append(f.name)
+    for fn in filenames:
+        await ingest_document(Path(data_dir) / fn, fn, kb_id=kb_id, tenant_id=tenant_id)
+    return {"status": "reindexing", "kb_id": kb_id, "files": len(filenames)}
 
 
 @router.delete("/{kb_id}")
