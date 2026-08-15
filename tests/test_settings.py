@@ -133,6 +133,20 @@ def test_bundled_tesseract_path_and_tessdata(tmp_path):
     assert _bundled_tessdata(str(exe)) == tessdata
 
 
+def test_custom_tesseract_cmd_overrides_bundled(monkeypatch, tmp_path):
+    import app.core.ocr as ocr
+
+    custom = tmp_path / "custom-tesseract.exe"
+    custom.write_bytes(b"custom")
+    bundled = tmp_path / "tesseract" / "tesseract.exe"
+    bundled.parent.mkdir()
+    bundled.write_bytes(b"bundled")
+
+    monkeypatch.setattr(ocr.settings, "tesseract_cmd", str(custom))
+    monkeypatch.setattr(ocr, "_bundled_tesseract", lambda *args, **kwargs: bundled)
+    assert ocr._tesseract_cmd() == str(custom)
+
+
 @pytest.mark.asyncio
 async def test_neo4j_test_uses_stored_masked_password(monkeypatch):
     from app.api import settings as settings_api

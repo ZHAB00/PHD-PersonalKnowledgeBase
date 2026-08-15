@@ -39,6 +39,8 @@ def _bundled_tesseract(exe_dir: Path | None = None) -> Path | None:
 
 
 def _tesseract_cmd() -> str:
+    if settings.tesseract_cmd and settings.tesseract_cmd != "tesseract":
+        return settings.tesseract_cmd
     bundled = _bundled_tesseract()
     return str(bundled) if bundled else settings.tesseract_cmd
 
