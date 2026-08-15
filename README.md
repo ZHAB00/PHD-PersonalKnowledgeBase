@@ -1,4 +1,4 @@
-# PDH-PKG
+﻿# PDH-PKG
 
 PDH-PKG 是一个面向个人电脑的本地知识库系统。上传 PDF、Word、Markdown、TXT 文档后，系统会自动完成解析、分块、向量化和入库；之后你可以通过对话方式提问，回答基于你自己的文档，并支持联网搜索、长期记忆和可选的知识图谱增强。
 
@@ -14,14 +14,13 @@ PDH-PKG 是一个面向个人电脑的本地知识库系统。上传 PDF、Word�
 - 向量模型：Ollama 或本地 ONNX，可在设置页切换
 - 长期记忆：自动总结重要对话事实并跨会话召回
 - 知识图谱（可选）：Neo4j 实体关系抽取与图谱增强检索
-- 桌面模式：pywebview 桌面窗口，也可浏览器访问
 - 免登录优先：本地自动获取令牌，可开启访问密码
 
 ## 系统架构
 
 ```mermaid
 flowchart LR
-  A[浏览器 / 桌面窗口] --> B[FastAPI 后端]
+  A[浏览器] --> B[FastAPI 后端]
   B --> C[Agent 工具层]
   C --> D[知识库检索]
   C --> E[文档统计]
@@ -48,8 +47,6 @@ flowchart LR
 | 缓存/任务状态 | Redis（可选，未启动时内存回退） |
 | 模型 | DeepSeek / OpenAI 兼容 SDK、LangChain Ollama、FastEmbed ONNX |
 | 前端 | HTML、CSS、原生 JavaScript |
-| 桌面 | pywebview |
-| 打包 | PyInstaller + Inno Setup 7 |
 
 ## 环境要求
 
@@ -66,30 +63,27 @@ flowchart LR
 git clone <仓库地址>
 cd <项目目录>
 
-# 一键初始化：安装依赖、创建 .env、下载 Qdrant
-powershell -ExecutionPolicy Bypass -File .\setup.ps1
+# 安装依赖
+python -m pip install -r requirements.txt
 
-# 编辑 .env，填写 DeepSeek API Key（使用云端对话时必填）
+# 复制配置模板并填写 API Key
+Copy-Item .env.example .env
 notepad .env
 
-# 启动调试模式（推荐首次使用）
-powershell -ExecutionPolicy Bypass -File .\packaging\debug.ps1
+# 启动后端
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 ```
 
 浏览器打开 `http://127.0.0.1:8001`。首次访问会自动获取本地令牌；然后在“设置”页测试对话模型、向量模型、联网搜索和 Neo4j，上传文档后即可提问。
 
-也可以直接启动后端：
-
-```powershell
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
-```
+Qdrant：从 Qdrant Release 下载 `qdrant-x86_64-pc-windows-msvc.zip`，解压后将 `qdrant.exe` 放到项目根目录的 `qdrant/` 文件夹，后端启动时会自动拉起。
 
 ## 服务说明
 
 | 服务 | 端口 | 是否必需 | 说明 |
 |---|---|---|---|
 | PDH-PKG 后端 | 8001 | 必需 | 主访问入口 |
-| Qdrant | 6333 | 必需 | `setup.ps1` 下载，后端可自动拉起 |
+| Qdrant | 6333 | 必需 | 手动安装，后端可自动拉起 |
 | Redis | 6379 | 可选 | 未启动时使用内存回退 |
 | Ollama | 11434 | 可选 | 本地模型与默认向量模型 |
 | Neo4j | 7687 / 7474 | 可选 | 仅知识图谱功能需要 |
@@ -139,22 +133,6 @@ ollama pull qwen3-embedding:4b
 3. 新建对话并提问，回答过程中可查看检索来源、工具调用与图谱证据
 4. 长期记忆会自动保存重要事实，后续会话可以跨会话召回
 
-## 打包安装
-
-打包脚本会安装 PyInstaller、调用 Inno Setup 7 生成 Windows 安装程序：
-
-```powershell
-# 基础打包
-powershell -ExecutionPolicy Bypass -File .\packaging\build.ps1 -Version 0.1.0
-
-# 如需把内置 ONNX 向量模型打进安装包
-powershell -ExecutionPolicy Bypass -File .\packaging\build.ps1 -Version 0.1.0 -BundleModel
-```
-
-产物输出到 `output\PDH-PKG-Setup-0.1.0.exe`。`packaging/resources/models/` 是构建时按需下载的本地模型缓存，不会提交到 Git 仓库。
-
-安装包支持完整安装、简洁安装和自定义安装三种类型。卸载时可以选择是否同时删除 `%LOCALAPPDATA%\PDH-PKG` 下的个人数据。
-
 ## Agent 评测
 
 项目内置 `agent_eval` 评测工具，对接 `agent评估指标体系.md` 中可离线计算的指标：
@@ -182,7 +160,7 @@ python -m pytest -q -p no:cacheprovider --basetemp=.pytest_tmp
 
 - `PDH_PKG_DEBUG=1` 时读取 `.env`，不读取 `settings.json`
 - 正式/打包模式读取 `data/settings.json`
-- 调试脚本：`powershell -ExecutionPolicy Bypass -File .\packaging\debug.ps1`
+- 调试模式：先设置 `$env:PDH_PKG_DEBUG='1'`，再启动 Uvicorn
 - 打包版：`PDH-PKG.exe --debug`
 
 ## 目录结构
@@ -195,7 +173,6 @@ app/                后端应用
   static/           前端静态资源
   templates/        HTML 页面
 agent_eval/         Agent 评测工具包
-packaging/          桌面启动器与打包脚本
 tests/              自动化测试
 landing/            落地页
 ```
@@ -212,11 +189,11 @@ landing/            落地页
 
 ### 启动后端报找不到 `qdrant.exe`
 
-先运行 `setup.ps1`，或从 Qdrant Release 下载 `qdrant-x86_64-pc-windows-msvc.zip`，解压后把 `qdrant.exe` 放到项目根目录的 `qdrant/` 文件夹。
+从 Qdrant Release 下载 `qdrant-x86_64-pc-windows-msvc.zip`，解压后把 `qdrant.exe` 放到项目根目录的 `qdrant/` 文件夹。
 
 ### 报 `No module named 'app'`
 
-当前目录不是项目根目录。先 `cd` 到项目根目录再启动，或使用 `packaging\debug.ps1`。
+当前目录不是项目根目录。先 `cd` 到项目根目录再启动。
 
 ### 切换向量模型后检索报维度不匹配
 

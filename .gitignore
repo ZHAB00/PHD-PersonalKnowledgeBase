@@ -74,3 +74,9 @@ landing/assets/screens/
 packaging/resources/models/
 packaging/resources/neo4j/
 _smoke_login.png
+# 打包/安装相关文件保留在本地，不上传
+packaging/
+Dockerfile
+docker-compose.yml
+setup.ps1
+*.ico
