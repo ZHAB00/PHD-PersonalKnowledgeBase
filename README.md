@@ -2,6 +2,8 @@
 
 PDH-PKG 是一个面向个人电脑的本地知识库系统。上传 PDF、Word、Markdown、TXT 文档后，系统会自动完成解析、分块、向量化和入库；之后你可以通过对话方式提问，回答基于你自己的文档，并支持联网搜索、长期记忆和可选的知识图谱增强。
 
+> 介绍网站与安装包下载：[pkg.pandahead.top](https://pkg.pandahead.top)
+
 > 项目定位为个人单机使用，不包含多租户、RBAC、SSO 等企业级功能。
 
 ## 核心特性
@@ -175,7 +177,6 @@ app/                后端应用
   static/           前端静态资源
   templates/        HTML 页面
 agent_eval/         Agent 评测工具包
-tests/              自动化测试
 landing/            落地页
 ```
 

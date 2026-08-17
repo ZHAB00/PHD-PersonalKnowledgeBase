@@ -58,6 +58,9 @@ _update_*.py
 _v.py
 *_decoded.txt
 
+# 本地自动化测试不随源码上传
+tests/
+
 # Local binaries / locks
 qdrant/qdrant.exe
 start
