@@ -61,6 +61,9 @@ _v.py
 # 本地自动化测试不随源码上传
 tests/
 
+# 内部接口说明保留在本地
+API_DOCS.md
+
 # Local binaries / locks
 qdrant/qdrant.exe
 start
