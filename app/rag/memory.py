@@ -47,6 +47,18 @@ SYSTEM_BUDGET_CHARS = 800
 SUMMARY_TRIGGER = 6          # summarize every N turns
 MEMORY_TTL = 86400 * 7       # 7 days
 
+# 短期上下文构建：最近对话轮数 + 模型窗口预算
+CONTEXT_WINDOW_TURNS = 10
+CONTEXT_USAGE_RATIO = 0.75
+TOOL_RESULT_CONTEXT_LIMIT = 1200
+MIN_CONTEXT_TOKENS = 4096
+DEFAULT_CONTEXT_WINDOW = {
+    "deepseek": 65536,
+    "openai_compatible": 32768,
+    "ollama": 8192,
+    "lmstudio": 8192,
+}
+
 # Qdrant 中的记忆集合
 MEMORY_COLLECTION = "kb_memory"
 
@@ -91,6 +103,198 @@ def apply_token_budget(history: list[dict], max_chars: int = TOKEN_BUDGET_CHARS)
         total += msg_chars
 
     return system_msgs + kept
+
+
+# ============================================================
+# 短期上下文：轮次 + token 预算 + 工具消息复用
+# ============================================================
+
+def estimate_tokens(text) -> int:
+    """粗略 token 估算：中文约 1-2 字符/token，英文约 4 字符/token。"""
+    if not text:
+        return 0
+    return max(1, len(str(text)) // 2)
+
+
+def _llm_message_tokens(message: dict) -> int:
+    content = message.get("content") or ""
+    tokens = estimate_tokens(content)
+    tokens += estimate_tokens(message.get("reasoning_content") or "")
+    for tc in message.get("tool_calls") or []:
+        fn = tc.get("function") or {}
+        tokens += estimate_tokens(fn.get("name", ""))
+        tokens += estimate_tokens(fn.get("arguments", ""))
+    return tokens
+
+
+def context_window_tokens(cfg: dict | None = None) -> int:
+    """返回模型上下文窗口；用户显式配置优先，否则按 provider 取保守值。"""
+    cfg = cfg or {}
+    override = int(cfg.get("context_window") or 0)
+    if override > 0:
+        return override
+    provider = cfg.get("provider") or "deepseek"
+    return DEFAULT_CONTEXT_WINDOW.get(provider, 32768)
+
+
+def _expand_llm_history(history: list[dict]) -> list[dict]:
+    """把历史展开成 LLM 消息：恢复上一轮 tool message，去掉前端展示字段。"""
+    expanded = []
+    for h in history:
+        hc = dict(h)
+        for key in ("ts", "kb_id", "session_id", "tenant_id"):
+            hc.pop(key, None)
+        tc = hc.get("tool_calls")
+        if isinstance(tc, list) and (len(tc) == 0 or (tc and "tool_name" in tc[0])):
+            del hc["tool_calls"]
+        internal = hc.pop("llm_tool_messages", None) or []
+        if isinstance(internal, list):
+            for im in internal:
+                imc = dict(im)
+                if imc.get("content") is not None or imc.get("tool_calls"):
+                    expanded.append(imc)
+        if hc.get("content") is not None or hc.get("tool_calls") or hc.get("reasoning_content"):
+            expanded.append(hc)
+    return [m for m in expanded if m.get("role") != "system"]
+
+
+def _group_history_by_turns(messages: list[dict]) -> list[list[dict]]:
+    """按用户问题把消息分组，保证不会在工具消息中间被截断。"""
+    groups = []
+    for m in messages:
+        if m.get("role") == "user":
+            groups.append([m])
+        elif groups:
+            groups[-1].append(m)
+        else:
+            groups.append([m])
+    return groups
+
+
+def build_llm_history(
+    history: list[dict],
+    cfg: dict | None = None,
+    max_turns: int = CONTEXT_WINDOW_TURNS,
+) -> list[dict]:
+    """构建送入 LLM 的短期上下文。
+
+    策略：
+    1. 恢复最近几轮中的 tool message，作为已检索证据。
+    2. 只保留最近 max_turns 个用户轮次。
+    3. 总 token 不超过模型窗口的 CONTEXT_USAGE_RATIO。
+    """
+    expanded = _expand_llm_history(history)
+    groups = _group_history_by_turns(expanded)
+    if max_turns > 0 and len(groups) > max_turns:
+        groups = groups[-max_turns:]
+
+    budget = max(MIN_CONTEXT_TOKENS, int(context_window_tokens(cfg) * CONTEXT_USAGE_RATIO))
+    kept_rev = []
+    total = 0
+    for group in reversed(groups):
+        group_tokens = sum(_llm_message_tokens(m) for m in group)
+        if kept_rev and total + group_tokens > budget:
+            break
+        kept_rev.append(group)
+        total += group_tokens
+    kept_groups = list(reversed(kept_rev))
+    return [m for group in kept_groups for m in group]
+
+
+def _normalize_query(text: str) -> str:
+    import re
+    return re.sub(r"[\s，。？！、,.?!；;：:]+", "", (text or "").lower())
+
+
+def wants_fresh_answer(message: str) -> bool:
+    """用户要求最新/重新检索时，不复用历史答案。"""
+    keywords = [
+        "最新", "更新", "重新", "再查", "再搜", "重新检索",
+        "latest", "fresh", "update", "re-search", "rescan",
+    ]
+    low = (message or "").lower()
+    return any(k in low for k in keywords)
+
+
+def _query_similarity(a: str, b: str) -> float:
+    """查询相似度：序列相似度 + 字符集合相似度取最大，兼容中文语序调整。"""
+    from difflib import SequenceMatcher
+    seq = SequenceMatcher(None, a, b).ratio()
+    set_a, set_b = set(a), set(b)
+    if not set_a or not set_b:
+        return seq
+    jaccard = len(set_a & set_b) / len(set_a | set_b)
+    return max(seq, jaccard)
+
+
+def _has_failed_tool_result(assistant_message: dict) -> bool:
+    """工具返回 error/空结果时，该答案不能作为可复用的证据。"""
+    for m in assistant_message.get("llm_tool_messages") or []:
+        if m.get("role") != "tool":
+            continue
+        content = m.get("content") or ""
+        if not content:
+            continue
+        try:
+            data = json.loads(content)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(data, dict) and (
+            data.get("status") == "error" or data.get("is_empty") is True or data.get("error")
+        ):
+            return True
+    return False
+
+
+def find_reusable_answer(
+    history: list[dict],
+    message: str,
+    max_turns: int = CONTEXT_WINDOW_TURNS,
+    max_age_seconds: int = 1800,
+    kb_id: str | None = None,
+) -> dict | None:
+    """检测最近是否已回答过相同/高度相似问题。
+
+    返回可复用的助手消息；用户要求最新信息、答案太旧、工具失败，
+    或答案来自不同知识库时不复用。
+    """
+    if wants_fresh_answer(message):
+        return None
+    normalized = _normalize_query(message)
+    if not normalized:
+        return None
+    user_seen = 0
+    for i in range(len(history) - 1, -1, -1):
+        if history[i].get("role") != "user":
+            continue
+        user_seen += 1
+        if user_seen > max_turns:
+            break
+        if kb_id:
+            prev_kb = history[i].get("kb_id")
+            if prev_kb and prev_kb != kb_id:
+                continue
+        prev = _normalize_query(history[i].get("content", ""))
+        if not prev or _query_similarity(normalized, prev) < 0.85:
+            continue
+        for j in range(i + 1, len(history)):
+            am = history[j]
+            if am.get("role") != "assistant":
+                continue
+            content = (am.get("content") or "").strip()
+            if not content:
+                break
+            if _has_failed_tool_result(am):
+                return None
+            ts = am.get("ts")
+            if ts:
+                try:
+                    if time.time() - float(ts) > max_age_seconds:
+                        return None
+                except (TypeError, ValueError):
+                    pass
+            return am
+    return None
 
 
 # ============================================================

@@ -217,6 +217,10 @@
                 <input id="setChatModel" placeholder="例如 deepseek-v4-flash / qwen2.5:7b">
               </label>
               <label class="settings-field">
+                <span>上下文窗口</span>
+                <input id="setChatContextWindow" type="number" min="0" step="1024" placeholder="0 = 自动（取窗口 75%）">
+              </label>
+              <label class="settings-field">
                 <span>Base URL</span>
                 <input id="setChatBaseUrl" placeholder="留空使用默认">
               </label>

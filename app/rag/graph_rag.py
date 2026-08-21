@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 _driver: Optional[GraphDatabase.driver] = None
 
 
-_neo4j_ok = None
 _neo4j_ok = None  # None=未测试，True=已连接，False=失败
 
 def _neo4j_config() -> dict:

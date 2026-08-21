@@ -23,13 +23,15 @@ from openai import AsyncOpenAI
 from app.config import settings
 from app.rag.retriever import retrieve
 from app.rag.memory import (
-    apply_token_budget, should_summarize, summarize_conversation,
+    CONTEXT_WINDOW_TURNS, TOOL_RESULT_CONTEXT_LIMIT, build_llm_history,
+    find_reusable_answer, should_summarize, summarize_conversation,
     store_long_term_memory, retrieve_long_term_memory,
     extract_key_facts, score_importance, build_memory_context,
 )
-from app.rag.tools import get_tools, execute_tool, tool_result_status
+from app.rag.tools import tool_result_status
 from app.models.chat import ChatResponse, SourceReference, ToolCallEvent
 from app.core import cache
+from app.core.user_settings import chat_config
 from app.core.chat_store import save_history, load_history, load_history_paginated, delete_history as delete_chat_history
 from app.prompts import SYSTEM_PROMPT
 
@@ -151,6 +153,17 @@ def _build_tool_call_events(tool_messages: list[dict]) -> list[ToolCallEvent]:
     return events
 
 
+def _bounded_llm_tool_messages(tool_messages: list[dict]) -> list[dict]:
+    """把 OpenAI 格式工具消息限制在短期上下文可承受的长度内。"""
+    bounded = []
+    for m in tool_messages:
+        mc = dict(m)
+        if mc.get("role") == "tool" and mc.get("content"):
+            mc["content"] = mc["content"][:TOOL_RESULT_CONTEXT_LIMIT]
+        bounded.append(mc)
+    return bounded
+
+
 # ============================================================
 # 智能体循环
 # ============================================================
@@ -163,88 +176,12 @@ async def _agent_loop(
     enable_graphrag: bool = True,
     max_rounds: int = MAX_TOOL_ROUNDS,
 ) -> tuple[str, list[dict], dict]:
-    tools = get_tools()
-    tool_messages = []
-    from app.core.user_settings import chat_config
-    cfg = chat_config()
-    usage_acc = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    pending_reasoning = ""
-    for m in reversed(messages):
-        if m.get("role") == "assistant" and m.get("reasoning_content"):
-            pending_reasoning = m["reasoning_content"]
-            break
-
-    for round_idx in range(max_rounds):
-        kwargs = {
-            "model": cfg["model"],
-            "messages": messages,
-            "temperature": 0.3,
-            "max_tokens": 2048,
-        }
-        if cfg.get("extra_body"):
-            kwargs["extra_body"] = cfg["extra_body"]
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
-
-        resp = await client.chat.completions.create(**kwargs)
-        msg = resp.choices[0].message
-        u = getattr(resp, "usage", None)
-        if u:
-            usage_acc["prompt_tokens"] += getattr(u, "prompt_tokens", 0) or 0
-            usage_acc["completion_tokens"] += getattr(u, "completion_tokens", 0) or 0
-            usage_acc["total_tokens"] += getattr(u, "total_tokens", 0) or 0
-        rc = getattr(msg, "reasoning_content", None)
-        if rc:
-            pending_reasoning = rc
-
-        if not msg.tool_calls:
-            return msg.content or "", tool_messages, usage_acc
-
-        prepared = []
-        for tc in msg.tool_calls:
-            tool_name = tc.function.name
-            try:
-                args = json.loads(tc.function.arguments)
-            except json.JSONDecodeError:
-                args = {}
-            prepared.append((tc, tool_name, args))
-            logger.info(f"Agent calls tool: {tool_name}({args})")
-
-        results = await asyncio.gather(
-            *(
-                execute_tool(tool_name, args, user_id=user_id, kb_id=kb_id, enable_graphrag=enable_graphrag)
-                for _, tool_name, args in prepared
-            ),
-            return_exceptions=True,
-        )
-
-        for (tc, tool_name, args), result in zip(prepared, results):
-            if isinstance(result, Exception):
-                result = json.dumps({"error": f"工具执行失败: {result}", "count": 0, "is_empty": True}, ensure_ascii=False)
-
-            tool_msg_assistant = {
-                "role": "assistant",
-                "content": getattr(msg, "content", None),
-                "tool_calls": [{
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tool_name, "arguments": tc.function.arguments},
-                }],
-            }
-            if pending_reasoning:
-                tool_msg_assistant["reasoning_content"] = pending_reasoning
-            tool_msg_result = {
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": result,
-            }
-            messages.append(tool_msg_assistant)
-            messages.append(tool_msg_result)
-            tool_messages.append(tool_msg_assistant)
-            tool_messages.append(tool_msg_result)
-
-    return "抱歉，处理超时，请尝试简化您的问题。", tool_messages, usage_acc
+    """LangGraph 状态图驱动的非流式智能体循环。"""
+    from app.rag.agent_loop import langgraph_agent_run
+    return await langgraph_agent_run(
+        client, messages, user_id=user_id, kb_id=kb_id,
+        enable_graphrag=enable_graphrag, max_rounds=max_rounds,
+    )
 
 
 # ============================================================
@@ -361,8 +298,8 @@ async def chat(
         else:
             ans = "当前知识库暂无文档。"
         history = await _get_history(session_id)
-        history.append({"role": "user", "content": message})
-        history.append({"role": "assistant", "content": ans})
+        history.append({"role": "user", "content": message, "kb_id": kb_id})
+        history.append({"role": "assistant", "content": ans, "kb_id": kb_id})
         await _set_history(session_id, history)
         return ChatResponse(session_id=session_id, answer=ans, sources=[], tool_calls=[])
 
@@ -379,18 +316,13 @@ async def chat(
     # 构建消息：系统提示词 + 可用工具
     # 从历史记录中剔除空 tool_calls（DeepSeek 拒绝 tool_calls: []）
     # 从历史副本构建 LLM 消息，保留原始历史用于保存
-    llm_history = []
-    for h in history:
-        hc = dict(h)
-        tc = hc.get("tool_calls")
-        if isinstance(tc, list) and (len(tc) == 0 or (tc and "tool_name" in tc[0])):
-            del hc["tool_calls"]
-        llm_history.append(hc)
-
-    history_budgeted = apply_token_budget(llm_history)
+    # 短期上下文：最近 N 轮 + 75% 上下文预算 + 上一轮 tool message
+    history_budgeted = build_llm_history(history, cfg=chat_config(), max_turns=CONTEXT_WINDOW_TURNS)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     # 注入当前知识库上下文，让 LLM 知道要检索哪个知识库
     messages.append({"role": "system", "content": f"\u5f53\u524d\u77e5\u8bc6\u5e93ID: {kb_id}\u3002\u8c03\u7528 doc_stats \u6216 search_knowledge_base \u65f6\u5fc5\u987b\u4f7f\u7528\u6b64 kb_id\u3002"})
+    if find_reusable_answer(history, message, kb_id=kb_id):
+        messages.append({"role": "system", "content": "检测到最近对话已就相同或高度相似的问题完成回答。除非用户要求最新/更新/重新检索，否则直接基于上述历史回答，不要重复调用 search_knowledge_base。"})
     untrusted_parts = []
     if memory_ctx:
         untrusted_parts.append("[\u957f\u671f\u8bb0\u5fc6]\n" + memory_ctx)
@@ -409,12 +341,15 @@ async def chat(
     # 从工具结果中提取来源，供前端展示
     sources = _extract_sources(tool_msgs)
 
-    # 保存历史记录（含工具调用，供前端展示）
+    # 保存历史记录（含工具调用，供前端展示；tool message 单独保留给下一轮 LLM）
     tc_data = [tc.model_dump() for tc in _build_tool_call_events(tool_msgs)]
-    history.append({"role": "user", "content": message})
-    msg = {"role": "assistant", "content": answer}
+    ts = time.time()
+    history.append({"role": "user", "content": message, "ts": ts, "kb_id": kb_id})
+    msg = {"role": "assistant", "content": answer, "ts": ts, "kb_id": kb_id}
     if tc_data:
         msg["tool_calls"] = tc_data
+    if tool_msgs:
+        msg["llm_tool_messages"] = _bounded_llm_tool_messages(tool_msgs)
     history.append(msg)
     await _set_history(session_id, history)
 
@@ -470,18 +405,13 @@ async def chat_stream(
         await cache.set_json(mem_cache_key, memories, ex=1800)
     memory_ctx = build_memory_context(memories)
     # 从历史副本构建 LLM 消息，保留原始历史用于保存
-    llm_history = []
-    for h in history:
-        hc = dict(h)
-        tc = hc.get("tool_calls")
-        if isinstance(tc, list) and (len(tc) == 0 or (tc and "tool_name" in tc[0])):
-            del hc["tool_calls"]
-        llm_history.append(hc)
-
-    history_budgeted = apply_token_budget(llm_history)
+    # 短期上下文：最近 N 轮 + 75% 上下文预算 + 上一轮 tool message
+    history_budgeted = build_llm_history(history, cfg=chat_config(), max_turns=CONTEXT_WINDOW_TURNS)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     # 注入当前知识库上下文，让 LLM 知道要检索哪个知识库
     messages.append({"role": "system", "content": f"\u5f53\u524d\u77e5\u8bc6\u5e93ID: {kb_id}\u3002\u8c03\u7528 doc_stats \u6216 search_knowledge_base \u65f6\u5fc5\u987b\u4f7f\u7528\u6b64 kb_id\u3002"})
+    if find_reusable_answer(history, message, kb_id=kb_id):
+        messages.append({"role": "system", "content": "检测到最近对话已就相同或高度相似的问题完成回答。除非用户要求最新/更新/重新检索，否则直接基于上述历史回答，不要重复调用 search_knowledge_base。"})
     untrusted_parts = []
     if memory_ctx:
         untrusted_parts.append("[\u957f\u671f\u8bb0\u5fc6]\n" + memory_ctx)
@@ -493,15 +423,25 @@ async def chat_stream(
     messages.append({"role": "user", "content": user_content})
 
     # 使用带工具调用事件的智能体循环
-    from app.rag.agent_loop import agent_loop_stream
+    from app.rag.agent_loop import langgraph_agent_stream
     client = _get_deepseek_client(timeout=120.0)
     tool_msgs = []
     full_answer = ""
     reasoning_content_acc = ""
     stream_tool_calls = []  # collect tool call info for history
+    llm_rounds = []
+    current_llm_round = None
+    pending_tool_results = 0
+    reasoning_buf = ""
+    round_reasoning = ""
+    last_tool_reasoning = ""
+    for m in reversed(messages):
+        if m.get("role") == "assistant" and m.get("reasoning_content"):
+            last_tool_reasoning = m["reasoning_content"]
+            break
 
     try:
-        async for chunk in agent_loop_stream(client, messages, user_id=user_id, kb_id=kb_id, enable_graphrag=enable_graphrag):
+        async for chunk in langgraph_agent_stream(client, messages, user_id=user_id, kb_id=kb_id, enable_graphrag=enable_graphrag):
             if chunk.startswith("__TOOL_CALL__:"):
                 try:
                     tc_data = json.loads(chunk[len("__TOOL_CALL__:"):])
@@ -511,6 +451,27 @@ async def chat_stream(
                         result="",
                         status="ok",
                     ))
+                    if current_llm_round is None or pending_tool_results == 0:
+                        current_llm_round = {"assistant": None, "tools": [], "ids": []}
+                        llm_rounds.append(current_llm_round)
+                        round_reasoning = reasoning_buf or last_tool_reasoning
+                        last_tool_reasoning = round_reasoning
+                        reasoning_buf = ""
+                    if current_llm_round["assistant"] is None:
+                        current_llm_round["assistant"] = {"role": "assistant", "content": None, "tool_calls": []}
+                        if round_reasoning:
+                            current_llm_round["assistant"]["reasoning_content"] = round_reasoning
+                    tc_id = f"call_{len(llm_rounds)-1}_{len(current_llm_round['assistant']['tool_calls'])}"
+                    current_llm_round["assistant"]["tool_calls"].append({
+                        "id": tc_id,
+                        "type": "function",
+                        "function": {
+                            "name": tc_data["name"],
+                            "arguments": json.dumps(tc_data.get("args", {}), ensure_ascii=False),
+                        },
+                    })
+                    current_llm_round["ids"].append(tc_id)
+                    pending_tool_results += 1
                 except Exception as ex:
                     logger.warning(f"Failed to parse tool call: {ex}")
                 yield chunk
@@ -522,13 +483,24 @@ async def chat_stream(
                         stream_tool_calls[-1].result = tr_data.get("result", "")[:8000]
                         stream_tool_calls[-1].status = tr_data.get("status") or tool_result_status(tr_data.get("result", ""))
                         stream_tool_calls[-1].sources = _extract_sources_from_result(tr_data.get("result", ""))
+                        pending_tool_results = max(0, pending_tool_results - 1)
+                        if current_llm_round and current_llm_round.get("ids"):
+                            tc_id = current_llm_round["ids"].pop(0)
+                            current_llm_round["tools"].append({
+                                "role": "tool",
+                                "tool_call_id": tc_id,
+                                "name": tr_data.get("name", ""),
+                                "content": (tr_data.get("result") or "")[:TOOL_RESULT_CONTEXT_LIMIT],
+                            })
                     except Exception as ex:
                         logger.warning(f"Failed to parse tool result: {ex}")
                 yield chunk
                 # 增量输出来源，即使后续调用失败前端也能看到
                 yield _yield_sources(stream_tool_calls)
             elif chunk.startswith("__REASONING__:"):
-                reasoning_content_acc += chunk[len("__REASONING__:"):]
+                reasoning_text = chunk[len("__REASONING__:"):]
+                reasoning_content_acc += reasoning_text
+                reasoning_buf += reasoning_text
             else:
                 full_answer += chunk
                 yield chunk
@@ -536,15 +508,23 @@ async def chat_stream(
         # 最终输出来源（在所有工具结果处理完之后）
         yield _yield_sources(stream_tool_calls)
 
-        # 保存带工具调用的历史记录
+        # 保存带工具调用的历史记录（tool message 单独保留给下一轮 LLM）
         full_answer = _guard_output(full_answer)
         tc_list = [tc.model_dump() for tc in stream_tool_calls]
-        history.append({"role": "user", "content": message})
-        msg = {"role": "assistant", "content": full_answer}
+        llm_tool_messages = []
+        for r in llm_rounds:
+            if r.get("assistant"):
+                llm_tool_messages.append(r["assistant"])
+                llm_tool_messages.extend(r.get("tools", []))
+        ts = time.time()
+        history.append({"role": "user", "content": message, "ts": ts, "kb_id": kb_id})
+        msg = {"role": "assistant", "content": full_answer, "ts": ts, "kb_id": kb_id}
         if reasoning_content_acc:
             msg["reasoning_content"] = reasoning_content_acc
         if tc_list:
             msg["tool_calls"] = tc_list
+        if llm_tool_messages:
+            msg["llm_tool_messages"] = llm_tool_messages
         history.append(msg)
         await _set_history(session_id, history)
         logger.info(
@@ -562,15 +542,23 @@ async def chat_stream(
         yield f"AI 服务暂时不可用: {str(e)}"
 
 
+def _strip_internal_fields(history: list[dict]) -> list[dict]:
+    """历史接口只返回前端展示字段，不暴露内部 tool message。"""
+    for m in history:
+        m.pop("llm_tool_messages", None)
+    return history
+
+
 async def get_chat_history(session_id: str) -> list[dict]:
-    return await _get_history(session_id)
+    return _strip_internal_fields(await _get_history(session_id))
 
 
 async def get_chat_history_paginated(session_id: str, offset: int = 0, limit: int = 20):
     """返回 (消息列表, 是否还有更多)，用于无限滚动。"""
     import asyncio
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, lambda: load_history_paginated(session_id, offset, limit))
+    messages, has_more = await loop.run_in_executor(None, lambda: load_history_paginated(session_id, offset, limit))
+    return _strip_internal_fields(messages), has_more
 
 
 async def clear_chat_history(session_id: str):

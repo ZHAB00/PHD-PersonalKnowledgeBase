@@ -1,7 +1,7 @@
-"""工具调用框架 v2：LangChain 1.0+ @tool 装饰器 + create_agent
+"""工具调用框架 v2：LangChain 1.0+ @tool 装饰器 + LangGraph StateGraph
 
 参考：
-  LangChain 1.0 create_agent：https://docs.langchain.com/oss/python/langchain/agents
+  LangGraph StateGraph：https://langchain-ai.github.io/langgraph/
   @tool 装饰器：langchain_core.tools.tool
 """
 from __future__ import annotations
@@ -252,7 +252,7 @@ BUILTIN_TOOLS_LC = [
 
 
 def get_langchain_tools() -> list:
-    """获取 LangChain 格式的工具（用于 create_agent）。"""
+    """获取 LangChain 格式的工具（用于 LangGraph 标准图）。"""
     return BUILTIN_TOOLS_LC
 
 
@@ -276,7 +276,7 @@ def get_tools() -> list[dict]:
 
 
 async def execute_tool(name: str, arguments: dict, user_id: str = "default", kb_id: str = "default", enable_graphrag: bool = True) -> str:
-    """旧版兼容：按名称执行工具，供手写智能体循环使用。"""
+    """旧版兼容：按名称执行工具，供 LangGraph 工具节点使用。"""
     t0 = time.time()
     tool_map = {t.name: t for t in BUILTIN_TOOLS_LC}
     if name not in tool_map:

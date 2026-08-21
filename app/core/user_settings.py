@@ -26,6 +26,7 @@ class UserSettings(BaseModel):
     chat_api_key: str = ""
     chat_model: str = ""
     chat_thinking: bool = True
+    chat_context_window: int = 0  # 0 表示按 provider 自动
     embedding_provider: str = "local"  # local | ollama | openai_compatible
     embedding_model: str = "BAAI/bge-small-zh-v1.5"
     embedding_base_url: str = ""
@@ -165,7 +166,14 @@ def chat_config() -> dict:
         key = s.chat_api_key or env.deepseek_api_key
         model = s.chat_model or env.deepseek_model
         extra = {}
-    return {"base_url": base, "api_key": key, "model": model, "extra_body": extra}
+    return {
+        "provider": s.chat_provider,
+        "base_url": base,
+        "api_key": key,
+        "model": model,
+        "extra_body": extra,
+        "context_window": s.chat_context_window,
+    }
 
 
 def _normalize_local_url(url: str) -> str:

@@ -14,6 +14,7 @@ PDH-PKG 是一个面向个人电脑的本地知识库系统。上传 PDF、Word�
 - Agent 工具调用：知识库检索、文档统计、长期记忆、联网搜索
 - 对话模型：DeepSeek / Ollama / LM Studio / 任意 OpenAI 兼容接口
 - 向量模型：Ollama 或本地 ONNX，可在设置页切换
+- 短期上下文：最近 10 轮对话 + 75% 模型窗口预算，复用上一轮检索证据，相同问题不重复检索
 - 长期记忆：自动总结重要对话事实并跨会话召回
 - 知识图谱（可选）：Neo4j 实体关系抽取与图谱增强检索
 - 免登录优先：本地自动获取令牌，可开启访问密码
@@ -45,6 +46,7 @@ flowchart LR
 |---|---|
 | 后端 | Python 3.10+、FastAPI、Uvicorn |
 | 向量库 | Qdrant |
+| Agent | LangGraph StateGraph、LangChain 工具封装 |
 | 检索 | LangChain、rank-bm25、MMR/RRF |
 | 图谱 | Neo4j |
 | 缓存/任务状态 | Redis（可选，未启动时内存回退） |

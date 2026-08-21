@@ -29,6 +29,7 @@ class SettingsUpdate(BaseModel):
     chat_api_key: str = ""
     chat_model: str = ""
     chat_thinking: bool = True
+    chat_context_window: int = 0
     embedding_provider: str = "ollama"
     embedding_model: str = "qwen3-embedding:4b"
     embedding_base_url: str = "http://127.0.0.1:11434/v1"
@@ -76,6 +77,8 @@ async def write_settings(data: SettingsUpdate):
         raise HTTPException(400, "端口必须是数字")
     if not (1024 <= port <= 65535):
         raise HTTPException(400, "端口必须在 1024-65535 之间")
+    if int(payload.get("chat_context_window", 0) or 0) < 0:
+        raise HTTPException(400, "上下文窗口不能为负数")
     if port in (6333, 6379, 11434, 7687):
         raise HTTPException(400, f"端口 {port} 已被其他服务占用")
     payload["app_port"] = port

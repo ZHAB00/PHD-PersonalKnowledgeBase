@@ -1,12 +1,17 @@
 """图谱可视化 API：返回用于 vis-network 的实体关系数据"""
 from __future__ import annotations
 import logging
-from fastapi import APIRouter, Query
+import threading
+import time
+from fastapi import APIRouter, HTTPException, Query
 from app.rag.graph_rag import _get_driver, _neo4j_database, EXTRACTION_PROMPT
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/graph", tags=["graph"])
+
+_GRAPH_BUILD_STATES: dict[str, dict] = {}
+_GRAPH_BUILD_LOCK = threading.Lock()
 
 
 @router.get("/data")
@@ -190,32 +195,80 @@ async def build_graph(
     max_chunks: int = Query(50),
 ):
     """根据指定知识库已有的 Qdrant 分块构建知识图谱。"""
-    import asyncio, concurrent.futures
+    driver = _get_driver(force_check=True)
+    if not driver:
+        raise HTTPException(400, "Neo4j 未连接或未启用，请先在设置页配置 Neo4j")
+    import asyncio
+
+    state = {
+        "status": "running",
+        "kb_id": kb_id,
+        "message": "准备构建",
+        "started_at": time.time(),
+        "total": 0,
+        "done": 0,
+        "failed": 0,
+        "entities": 0,
+        "relations": 0,
+        "error": "",
+    }
+    with _GRAPH_BUILD_LOCK:
+        _GRAPH_BUILD_STATES[kb_id] = state
     loop = asyncio.get_running_loop()
-    loop.run_in_executor(None, _build_graph_task_sync, kb_id, max_chunks)
-    return {"status": "started", "kb_id": kb_id, "message": "后台构建中，前端可正常使用"}
+    loop.run_in_executor(None, _build_graph_task_sync, kb_id, max_chunks, state)
+    return {
+        "status": "started",
+        "task_id": kb_id,
+        "kb_id": kb_id,
+        "message": "后台构建中，可查看状态",
+    }
 
 
+@router.get("/build/status")
+async def graph_build_status(kb_id: str = Query("default")):
+    """返回指定知识库最近一次图谱构建状态。"""
+    with _GRAPH_BUILD_LOCK:
+        state = _GRAPH_BUILD_STATES.get(kb_id)
+    if not state:
+        return {
+            "status": "idle", "kb_id": kb_id,
+            "total": 0, "done": 0, "failed": 0,
+            "entities": 0, "relations": 0, "message": "", "error": "",
+        }
+    return dict(state)
 
 
-def _build_graph_task_sync(kb_id: str, max_chunks: int):
+def _build_graph_task_sync(kb_id: str, max_chunks: int, state: dict | None = None):
     import asyncio
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(_build_graph_task(kb_id, max_chunks))
+        loop.run_until_complete(_build_graph_task(kb_id, max_chunks, state))
     finally:
         loop.close()
 
-async def _build_graph_task(kb_id: str, max_chunks: int):
+
+async def _build_graph_task(kb_id: str, max_chunks: int, state: dict | None = None):
+    """带状态跟踪的图谱构建入口。"""
+    try:
+        await _build_graph_task_inner(kb_id, max_chunks, state)
+    except Exception as e:
+        logger.exception("Graph build failed for kb=%s", kb_id)
+        if state:
+            state.update({"status": "error", "error": str(e), "message": "构建失败"})
+
+
+async def _build_graph_task_inner(kb_id: str, max_chunks: int, state: dict | None = None):
     """完整图谱构建：清空旧数据、处理全部分块、批量写入 Neo4j。"""
+    def _set(**kw):
+        if state:
+            state.update(kw)
+
     import asyncio, json as _json, re as _re, httpx as _httpx
     from openai import OpenAI
     from qdrant_client import QdrantClient
     from app.rag.graph_rag import delete_kb_graph, graph_stats, _get_driver, _safe_neo4j_value
     from app.core.user_settings import chat_config
-
-
 
     client = QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port, check_compatibility=False)
     all_chunks = []
@@ -223,33 +276,39 @@ async def _build_graph_task(kb_id: str, max_chunks: int):
     while True:
         result = client.scroll(collection_name=f"kb_{kb_id}", limit=200, offset=offset, with_payload=True, with_vectors=False)
         points, next_offset = result[0], result[1]
-        if not points: break
+        if not points:
+            break
         all_chunks.extend(points)
-        if next_offset is None: break
+        if next_offset is None:
+            break
         offset = next_offset
 
     if not all_chunks:
         logger.warning("Graph build: no chunks for kb=%s", kb_id)
+        _set(status="error", error="当前知识库没有可分块内容", message="构建失败")
         return
 
     meaningful = [p for p in all_chunks if len(p.payload.get("content", "")) > 80] or all_chunks
     to_process = meaningful if max_chunks <= 0 else meaningful[:max_chunks]
     total = len(to_process)
     logger.info("Graph build: %d chunks, kb=%s", total, kb_id)
+    _set(status="running", total=total, done=0, failed=0, message="正在校验抽取模型")
 
     cfg = chat_config()
     llm = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=_httpx.Timeout(60.0, connect=10.0))
-    # Verify the extraction model before clearing the old graph.
+    # 先验证抽取模型，成功后才清空旧图谱，避免把好数据删掉。
     try:
         probe_txt = to_process[0].payload.get("content", "")[:3000]
         probe_prompt = EXTRACTION_PROMPT.replace("{chunk_text}", probe_txt or "test")
-        llm.chat.completions.create(model=cfg["model"], messages=[{"role":"user","content":probe_prompt}], temperature=0.3, max_tokens=64)
+        llm.chat.completions.create(model=cfg["model"], messages=[{"role": "user", "content": probe_prompt}], temperature=0.3, max_tokens=64)
     except Exception as e:
         logger.warning("Graph build aborted before clearing old graph: %s", e)
+        _set(status="error", error=f"抽取模型校验失败: {e}", message="构建失败")
         return
 
     delete_kb_graph(kb_id)
     logger.info("Graph build: cleared kb=%s", kb_id)
+    _set(message="正在抽取实体和关系")
 
     BATCH = 25
     ent_buf = []
@@ -265,7 +324,7 @@ async def _build_graph_task(kb_id: str, max_chunks: int):
 
         try:
             prompt = EXTRACTION_PROMPT.replace("{chunk_text}", txt[:3000])
-            resp = llm.chat.completions.create(model=cfg["model"], messages=[{"role":"user","content":prompt}], temperature=0.3, max_tokens=2048)
+            resp = llm.chat.completions.create(model=cfg["model"], messages=[{"role": "user", "content": prompt}], temperature=0.3, max_tokens=2048)
             raw = resp.choices[0].message.content.strip()
             m = _re.search(r"\{[\s\S]*\}", raw)
             if m:
@@ -277,17 +336,31 @@ async def _build_graph_task(kb_id: str, max_chunks: int):
             ok += 1
         except Exception as e:
             fail += 1
-            if fail <= 3: logger.warning("Graph chunk %d fail: %s", idx+1, e)
+            if fail <= 3:
+                logger.warning("Graph chunk %d fail: %s", idx + 1, e)
 
-        if len(ent_buf) >= BATCH * 8 or (idx == total-1 and (ent_buf or rel_buf)):
-            _flush_graph_batch(ent_buf, rel_buf, kb_id)
+        if len(ent_buf) >= BATCH * 8 or (idx == total - 1 and (ent_buf or rel_buf)):
+            counts = _flush_graph_batch(ent_buf, rel_buf, kb_id) or {}
+            if state:
+                state["entities"] = state.get("entities", 0) + counts.get("entities", 0)
+                state["relations"] = state.get("relations", 0) + counts.get("relations", 0)
             ent_buf.clear()
             rel_buf.clear()
 
-        if (idx+1) % 50 == 0:
-            logger.info("Graph build: %d/%d (fail:%d)", idx+1, total, fail)
+        if (idx + 1) % 10 == 0 or idx == total - 1:
+            _set(done=idx + 1, failed=fail, message=f"正在构建 {idx + 1}/{total}")
+        if (idx + 1) % 50 == 0:
+            logger.info("Graph build: %d/%d (fail:%d)", idx + 1, total, fail)
 
     stats = graph_stats(kb_id)
+    _set(
+        status="success",
+        done=total,
+        failed=fail,
+        entities=stats.get("entities", 0),
+        relations=stats.get("relations", 0),
+        message="构建完成",
+    )
     logger.info("Graph DONE kb=%s: %d chunks, %dE/%dR (fail:%d)", kb_id, ok, stats["entities"], stats["relations"], fail)
 
 
@@ -295,7 +368,8 @@ def _flush_graph_batch(ent_buf, rel_buf, kb_id):
     """批量将实体和关系写入 Neo4j。"""
     from app.rag.graph_rag import _get_driver, _safe_neo4j_value as _sv, normalize_entity_name as _norm
     driver = _get_driver(force_check=True)
-    if not driver: return
+    if not driver:
+        return {"entities": 0, "relations": 0}
     with driver.session(database=_neo4j_database()) as session:
         seen = {}
         for ent, ct, cid, did in ent_buf:
@@ -325,3 +399,4 @@ def _flush_graph_batch(ent_buf, rel_buf, kb_id):
                     "MERGE (a)-[r:RELATES_TO {type:$rt}]->(b) SET r.description=$rd,r.kb_id=$kb,r.updated_at=timestamp()",
                     s=rk[0], sn=s, t=rk[1], tn=t, rt=rt, rd=rd, kb=kb_id,
                 )
+    return {"entities": len(seen), "relations": len(sr)}

@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     neo4j_bin: str = ""
     neo4j_java_home: str = ""
     # GraphRAG 实体抽取模型（未设置时回退到 deepseek_model）
-    graphrag_llm_model: str = "deepseek-chat"
+    graphrag_llm_model: str = "deepseek-v4-flash"
     # GraphRAG 自动入库采样数（0 表示全量，较慢且成本高）
     graph_ingest_max_chunks: int = 50
     # GraphRAG 检索最大图证据节点数

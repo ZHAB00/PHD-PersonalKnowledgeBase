@@ -60,6 +60,7 @@
     graphRagEnabled: true,
     graphMode: localStorage.getItem("kb_graph_mode") || "2d",
     graphDesign: localStorage.getItem("kb_graph_design") || "stellar",
+    graphKbId: localStorage.getItem("kb_graph_kb_id") || "default",
     chatKbId: localStorage.getItem("kb_chat_kb_id") || "default",
     docKbId: localStorage.getItem("kb_doc_kb_id") || "default",
     userId: localStorage.getItem("kb_user_id") || "default",
@@ -130,7 +131,8 @@
     list.sort(function(a,b) { return (b.updated||0) - (a.updated||0); });
     c.innerHTML = list.map(function(s) {
       var act = s.id === state.sessionId ? " active" : "";
-      var lb = stripMd(s.label || s.title || "新建对话");
+      var rawLb = (s.label || s.title || "") === "???" ? "" : (s.label || s.title || "新建对话");
+      var lb = stripMd(rawLb);
       return '<div class="session-item' + act + '" data-sid="' + s.id + '">' +
         '<span class="session-item-title" data-sid="' + s.id + '">' + esc(lb) + '</span>' +
         '<button class="session-item-del" data-sid="' + s.id + '">&times;</button></div>';
@@ -164,13 +166,14 @@
     if (!view.querySelector(".message") && !view.querySelector(".chat-empty")) {
       lch();
     }
-    rsl(); scv();
+    rsl(); scv(); stbLater();
   }
 
   function dls(sid) {
     var list = gsl();
     var f = list.find(function(s) { return s.id === sid; });
-    var label = stripMd(f && (f.label || f.title) || "新建对话");
+    var rawLabel = ((f && (f.label || f.title)) || "") === "???" ? "" : ((f && (f.label || f.title)) || "新建对话");
+    var label = stripMd(rawLabel);
     showConfirm("确定要删除对话“" + label + "”吗？", function() {
       fetch("/api/chat/clear/" + sid, { method: "POST" }).catch(function(){});
       var deletedView = document.querySelector('.session-view[data-sid="' + sid + '"]');
@@ -260,6 +263,7 @@
   }
 
   function stb() { var cm = $("chatMessages"); if (cm) cm.scrollTop = cm.scrollHeight; }
+  function stbLater() { stb(); requestAnimationFrame(stb); setTimeout(stb, 80); }
 
 
   function rmd(el, text) {
@@ -568,7 +572,7 @@
     ams("user", txt, mySid);
 
     var l = gsl(); var f = l.find(function(s) { return s.id === state.sessionId; });
-    if (f && !f.label) {
+    if (f && (!f.label || f.label === "???")) {
       fetch("/api/chat/title", {
         method: "POST", headers: {"Content-Type":"application/json"},
         body: JSON.stringify({session_id: state.sessionId, message: txt})
@@ -734,7 +738,7 @@
           lchMore();
         }
       };
-      stb();
+      stbLater();
     } catch(e) { if (v) v.innerHTML = ""; }
   }
 
@@ -807,11 +811,15 @@
        var gks = $("graphKbSelect");
        if (gks) {
          gks.innerHTML = "";
+         var graphSel = state.graphKbId || "default";
+         var graphSelFound = false;
          (data || []).forEach(function(kb) {
            var o = document.createElement("option");
            o.value = kb.id; o.textContent = kb.name;
+           if (kb.id === graphSel) { o.selected = true; graphSelFound = true; }
            gks.appendChild(o);
          });
+         if (!graphSelFound) { gks.value = "default"; state.graphKbId = "default"; localStorage.setItem("kb_graph_kb_id", "default"); }
        }
       updateKbButtons();
     } catch(e) {}
@@ -828,6 +836,7 @@
       $("setChatApiKey").value = s.chat_api_key || "";
       $("setChatModel").value = s.chat_model || "";
       $("setChatThinking").checked = !!s.chat_thinking;
+      var cw = $("setChatContextWindow"); if (cw) cw.value = s.chat_context_window || 0;
       $("setEmbeddingProvider").value = s.embedding_provider || "ollama";
       $("setEmbeddingModel").value = s.embedding_model || "";
       $("setEmbeddingBaseUrl").value = s.embedding_base_url || "";
@@ -859,6 +868,7 @@
       chat_api_key: $("setChatApiKey").value,
       chat_model: $("setChatModel").value.trim(),
       chat_thinking: $("setChatThinking").checked,
+      chat_context_window: Math.max(0, parseInt($("setChatContextWindow").value || "0", 10) || 0),
       embedding_provider: $("setEmbeddingProvider").value,
       embedding_model: $("setEmbeddingModel").value.trim(),
       embedding_base_url: $("setEmbeddingBaseUrl").value.trim(),
@@ -1419,7 +1429,7 @@ async function ckb() {
   function on(id, evt, fn) { var el = $(id); if (el) el.addEventListener(evt, fn); }
 
   on("btnNewChat", "click", sns);
-  on("navGraph", "click", function() { switchView("graph"); renderGraphView(); });
+  on("navGraph", "click", function() { switchView("graph"); renderGraphView(); initGraphBuildState(); });
   on("navDocuments", "click", function() { switchView("documents"); rdl(); lkl(); });
   on("navSettings", "click", function() { switchView("settings"); });
   on("settingsBack", "click", function() { scv(); });
@@ -1444,7 +1454,7 @@ async function ckb() {
   on("graphRefresh", "click", refreshGraph);
   on("graphBuild", "click", buildGraph);
   on("graphSearch", "keydown", function(e) { if (e.key === "Enter") refreshGraph(); });
-  on("graphKbSelect", "change", function() { state.kbId = this.value; refreshGraph(); });
+  on("graphKbSelect", "change", function() { state.graphKbId = this.value; localStorage.setItem("kb_graph_kb_id", this.value); refreshGraph(); initGraphBuildState(); });
   on("graphFit", "click", function() { fitGraph(true); });
   on("graphZoomIn", "click", function() { zoomGraph(1); });
   on("graphZoomOut", "click", function() { zoomGraph(-1); });
@@ -1541,7 +1551,7 @@ async function ckb() {
       local.forEach(function(s) { localMap[s.id] = s; });
       d.sessions.forEach(function(ss) {
         if (localMap[ss.id]) {
-          if (ss.title && !localMap[ss.id].label) localMap[ss.id].label = ss.title;
+          if (ss.title && (!localMap[ss.id].label || localMap[ss.id].label === "???")) localMap[ss.id].label = ss.title;
         } else {
           local.push({ id: ss.id, created: ss.created_at*1000 || Date.now(), updated: ss.created_at*1000 || Date.now(), label: ss.title || "" });
         }
@@ -1907,7 +1917,7 @@ async function ckb() {
     state.raf = requestAnimationFrame(draw);
   }
   async function renderGraphView() {
-    var kbId = (document.getElementById("graphKbSelect") ? document.getElementById("graphKbSelect").value : null) || state.docKbId || "default";
+    var kbId = graphBuildCurrentKb();
     var search = $("graphSearch") ? $("graphSearch").value : "";
 
     var url = "/api/graph/data?kb_id=" + encodeURIComponent(kbId) + "&limit=200";
@@ -2817,26 +2827,120 @@ async function ckb() {
     if (graphNetwork) { graphNetwork.destroy(); graphNetwork = null; }
     destroyGraph3D();
     renderGraphView();
+    initGraphBuildState();
+  }
+
+  var graphBuildTimer = null;
+
+  function graphBuildBtn() {
+    return document.getElementById("graphBuild");
+  }
+
+  function graphBuildCurrentKb() {
+    var sel = document.getElementById("graphKbSelect");
+    return state.graphKbId || (sel && sel.value) || state.docKbId || "default";
+  }
+
+  function graphBuildStopPoll() {
+    if (graphBuildTimer) { clearInterval(graphBuildTimer); graphBuildTimer = null; }
+  }
+
+  function graphBuildReset() {
+    graphBuildStopPoll();
+    var b = graphBuildBtn();
+    if (b) { b.textContent = "构建图谱"; b.disabled = false; }
+  }
+
+  function graphBuildStartPoll(kbId, btn) {
+    graphBuildStopPoll();
+    btn.disabled = true;
+    graphBuildTimer = setInterval(async function() {
+      try {
+        var sr = await fetch("/api/graph/build/status?kb_id=" + encodeURIComponent(kbId));
+        var st = await sr.json();
+        if (!st || st.status === "idle") return;
+        if (st.status === "running") {
+          var total = st.total || 0;
+          var done = st.done || 0;
+          btn.textContent = total ? "构建中 " + done + "/" + total : "构建中...";
+        } else if (st.status === "success") {
+          graphBuildStopPoll();
+          btn.textContent = "构建完成";
+          btn.disabled = true;
+          setTimeout(function() { graphBuildReset(); refreshGraph(); }, 1200);
+        } else if (st.status === "error") {
+          graphBuildStopPoll();
+          btn.textContent = "构建图谱";
+          btn.disabled = false;
+          alert("图谱构建失败: " + (st.error || st.message || "未知错误"));
+        }
+      } catch(e) {
+        console.error(e);
+        graphBuildReset();
+      }
+    }, 3000);
+  }
+
+  async function initGraphBuildState() {
+    var btn = graphBuildBtn();
+    if (!btn) return;
+    var kbId = graphBuildCurrentKb();
+    try {
+      var sr = await fetch("/api/graph/build/status?kb_id=" + encodeURIComponent(kbId));
+      var st = await sr.json();
+      if (!st || st.status === "idle") {
+        graphBuildReset();
+        return;
+      }
+      if (st.status === "running") {
+        var total = st.total || 0;
+        var done = st.done || 0;
+        btn.disabled = true;
+        btn.textContent = total ? "构建中 " + done + "/" + total : "构建中...";
+        graphBuildStartPoll(kbId, btn);
+        return;
+      }
+      if (st.status === "success") {
+        graphBuildReset();
+        return;
+      }
+      if (st.status === "error") {
+        graphBuildReset();
+        alert("图谱构建失败: " + (st.error || st.message || "未知错误"));
+      }
+    } catch(e) {
+      console.error(e);
+      graphBuildReset();
+    }
   }
 
   async function buildGraph() {
-    var btn = document.getElementById("graphBuild");
+    var btn = graphBuildBtn();
     if (!btn) return;
+    var kbId = graphBuildCurrentKb();
+    graphBuildReset();
     btn.disabled = true;
     btn.textContent = "构建中...";
     try {
-      var kbId = (document.getElementById("graphKbSelect") ? document.getElementById("graphKbSelect").value : null) || state.docKbId || "default";
       var resp = await fetch("/api/graph/build?kb_id=" + encodeURIComponent(kbId) + "&max_chunks=0", { method: "POST" });
-      var data = await resp.json();
+      var data = {};
+      try { data = await resp.json(); } catch(e) {}
+      if (!resp.ok) {
+        graphBuildReset();
+        alert("图谱构建失败: " + (data.detail || data.message || resp.statusText || "未知错误"));
+        return;
+      }
       console.log("Graph build:", data);
-      btn.textContent = "构建中...等待5分钟后刷新";
-      setTimeout(function() { btn.textContent = "构建图谱"; btn.disabled = false; refreshGraph(); }, 300000);
+      btn.textContent = "构建中...等待状态";
+      graphBuildStartPoll(kbId, btn);
+      setTimeout(function() { graphBuildReset(); }, 300000);
     } catch(e) {
       console.error(e);
-      btn.textContent = "构建图谱";
-      btn.disabled = false;
+      graphBuildReset();
     }
   }
+
+  initGraphBuildState();
 
   window.refreshGraph = refreshGraph;
   window.buildGraph = buildGraph;

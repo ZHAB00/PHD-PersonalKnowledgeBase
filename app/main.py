@@ -173,8 +173,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="PDH-PKG",
-    description="企业级知识库搭建与智能对话系统",
-    version="2.0.0",
+    description="个人知识库搭建与智能对话系统",
+    version="0.2.0",
     lifespan=lifespan,
 )
 

@@ -71,12 +71,13 @@ async def generate_title(data: dict):
     session_id = data.get("session_id", "")
     message = data.get("message", "")
     from openai import AsyncOpenAI
-    from app.config import settings
+    from app.core.user_settings import chat_config
 
-    client = AsyncOpenAI(base_url=settings.deepseek_base_url, api_key=settings.deepseek_api_key)
+    cfg = chat_config()
+    client = AsyncOpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"])
     try:
         resp = await client.chat.completions.create(
-            model=settings.deepseek_model,  # 与 .env/设置中的对话模型保持一致
+            model=cfg["model"],
             messages=[
                 {"role": "system", "content": "用15个字以内总结以下用户消息作为对话标题，只返回标题文本，不要引号和其他内容"},
                 {"role": "user", "content": message[:200]},
@@ -89,13 +90,15 @@ async def generate_title(data: dict):
         import re; title = re.sub(r'[#*_`~>|]', '', title).replace('"', '').replace("'", '').strip()
         if len(title) > 20:
             title = title[:20]
+        if not title:
+            title = message[:15].replace("\n", " ")
         # 保存标题到会话表
         try:
             from app.core.chat_store import save_session
             save_session(session_id, title, "default")
         except Exception:
             pass
-        return {"title": title or "???"}
+        return {"title": title or "新建对话"}
     except Exception as e:
         # 回退方案：使用消息前 15 个字符
         fallback = message[:15].replace("\n", " ")
@@ -104,7 +107,7 @@ async def generate_title(data: dict):
             save_session(session_id, fallback, "default")
         except Exception:
             pass
-        return {"title": fallback or "???"}
+        return {"title": fallback or "新建对话"}
 
 @router.get("/history/{session_id}")
 async def get_history(session_id: str, offset: int = 0, limit: int = 20):
